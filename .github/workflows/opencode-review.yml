@@ -1,13 +1,14 @@
 name: AI Code Review
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: ["PR Signal"]
+    types: [completed]
 
 jobs:
   review:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
     permissions:
-      id-token: write
       pull-requests: write
       issues: write
       contents: read
@@ -16,7 +17,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Get PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.BEEFORGE_REVIEW_PAT }}
+        run: |
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state open --json number,headRefName --jq ".[] | select(.headRefName == \"${{ github.event.workflow_run.head_branch }}\") | .number" || true)
+          if [ -z "$PR_NUMBER" ]; then
+            # Fallback: search by SHA
+            PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state open --json number,headSha --jq ".[] | select(.headSha == \"${{ github.event.workflow_run.head_sha }}\") | .number" || true)
+          fi
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
       - uses: anomalyco/opencode/github@latest
+        if: steps.pr.outputs.number != ''
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.BEEFORGE_REVIEW_PAT }}
