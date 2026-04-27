@@ -19,9 +19,10 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.BEEFORGE_REVIEW_PAT }}
         with:
           model: deepseek/deepseek-chat
-          token: ${{ secrets.BEEFORGE_REVIEW_PAT }}
+          use_github_token: true
           prompt: |
             你是项目的 code reviewer，请用中文 review 这个 PR：
             - 检查代码质量和潜在 bug
