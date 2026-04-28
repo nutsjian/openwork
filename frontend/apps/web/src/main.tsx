@@ -4,11 +4,16 @@ import { createRoot } from "react-dom/client"
 import "@workspace/ui/globals.css"
 import { App } from "./App.tsx"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
+import { TooltipProvider } from "@workspace/ui/components/tooltip"
+import { Toaster } from "@workspace/ui/components/sonner"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
-      <App />
+      <TooltipProvider>
+        <App />
+        <Toaster />
+      </TooltipProvider>
     </ThemeProvider>
   </StrictMode>
 )

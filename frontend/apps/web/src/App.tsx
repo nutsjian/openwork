@@ -1,19 +1,46 @@
 import { Button } from "@workspace/ui/components/button"
+import { AppSidebar } from "@/components/app-sidebar"
+import { ChartAreaInteractive } from "@/components/chart-area-interactive"
+import { DataTable } from "@/components/data-table"
+import { SectionCards } from "@/components/section-cards"
+import { SiteHeader } from "@/components/site-header"
+import { SidebarInset, SidebarProvider } from "@workspace/ui/components/sidebar"
+import data from "@/app/dashboard/data.json"
 
 export function App() {
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
+    <SidebarProvider>
+      <AppSidebar />
+      <SidebarInset>
+        <SiteHeader />
+        <div className="flex flex-1 flex-col">
+          <div className="@container/main flex flex-1 flex-col gap-2">
+            <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
+              {/* Original App.tsx content embedded in a welcome card */}
+              <div className="px-4 lg:px-6">
+                <div className="flex flex-col gap-4 rounded-lg border bg-card p-6 text-sm leading-loose shadow-sm">
+                  <div>
+                    <h1 className="font-medium text-lg">Project ready!</h1>
+                    <p>You may now add components and start building.</p>
+                    <p>
+                      We&apos;ve already added the button component for you.
+                    </p>
+                    <Button className="mt-2">Button</Button>
+                  </div>
+                  <div className="text-muted-foreground font-mono text-xs">
+                    (Press <kbd>d</kbd> to toggle dark mode)
+                  </div>
+                </div>
+              </div>
+              <SectionCards />
+              <div className="px-4 lg:px-6">
+                <ChartAreaInteractive />
+              </div>
+              <DataTable data={data} />
+            </div>
+          </div>
         </div>
-        <div className="text-muted-foreground font-mono text-xs">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }
