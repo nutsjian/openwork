@@ -15,69 +15,105 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.BEEFORGE_REVIEW_PAT }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
-
-          echo "=== Collecting PR info via GitHub API ==="
-
-          # Get changed files list
-          CHANGED_FILES=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | "\(.filename) (+\(.additions) -\(.deletions))"' 2>/dev/null || echo "")
-          echo "Changed files:"
-          echo "${CHANGED_FILES}"
-
-          # Get diff via GitHub API (accept header for raw diff format)
-          DETAILED_DIFF=$(gh api \
-            -H "Accept: application/vnd.github.v3.diff" \
-            "repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null | head -5000 || echo "")
-          DIFF_LINES=$(echo "${DETAILED_DIFF}" | wc -l | tr -d ' ')
-          echo "Diff lines: ${DIFF_LINES}"
-
-          # Get commit messages via GitHub API
-          COMMITS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
-            --jq '.[] | "- \(.commit.message | split("\n")[0])"' 2>/dev/null || echo "")
-          echo "Commits:"
-          echo "${COMMITS}"
-
-          # Safety check: if diff is empty, skip review
-          if [ -z "${DETAILED_DIFF}" ] || [ "${DIFF_LINES}" -lt 3 ]; then
-            echo "No diff content found, posting skip comment..."
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              --method POST \
-              --field body="## 🤖 AI Code Review
-
-          ⚠️ 无法获取到代码变更内容（diff 为空），跳过此次 review。
-
-          这通常发生在 PR 没有实际代码变更的情况下。
-
-          ---
-          *Powered by DeepSeek | Reviewed by beeforge-review-ai*"
-            exit 0
-          fi
-
-          echo "=== Calling DeepSeek API for code review ==="
-          # Build prompt using Python for reliable variable interpolation and JSON escaping
-          REVIEW_BODY=$(python3 << 'PYEOF'
+          python3 << 'PYEOF'
           import json
           import os
+          import subprocess
           import urllib.request
           import urllib.error
+          import sys
 
-          pr_title = os.environ.get("PR_TITLE", "")
-          pr_body = os.environ.get("PR_BODY", "") or "(无描述)"
-          pr_author = os.environ.get("PR_AUTHOR", "")
-          changed_files = os.environ.get("CHANGED_FILES", "")
-          detailed_diff = os.environ.get("DETAILED_DIFF", "")
-          commits = os.environ.get("COMMITS", "")
+          gh_token = os.environ.get("GH_TOKEN", "")
           api_key = os.environ.get("DEEPSEEK_API_KEY", "")
 
+          # Read event payload
+          with open(os.environ["GITHUB_EVENT_PATH"], "r") as f:
+              event = json.load(f)
+
+          pr = event.get("pull_request", {})
+          repo = event.get("repository", {})
+          repo_full = repo.get("full_name", "")
+          pr_number = pr.get("number", "")
+          pr_title = pr.get("title", "")
+          pr_body = pr.get("body", "") or "(无描述)"
+          pr_author = pr.get("user", {}).get("login", "")
+
+          print(f"=== PR #{pr_number}: {pr_title} by {pr_author} ===", flush=True)
+
+          def gh_api(endpoint, accept="application/vnd.github+json"):
+              """Call GitHub API and return response text."""
+              url = f"https://api.github.com/{endpoint}"
+              req = urllib.request.Request(url)
+              req.add_header("Authorization", f"Bearer {gh_token}")
+              req.add_header("Accept", accept)
+              req.add_header("User-Agent", "ai-code-review-bot")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.read().decode("utf-8")
+              except Exception as e:
+                  print(f"GitHub API error for {endpoint}: {e}", flush=True)
+                  return ""
+
+          def gh_api_post(endpoint, body):
+              """Call GitHub API POST and return response JSON."""
+              url = f"https://api.github.com/{endpoint}"
+              payload = json.dumps(body).encode("utf-8")
+              req = urllib.request.Request(url, data=payload, method="POST")
+              req.add_header("Authorization", f"Bearer {gh_token}")
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("Content-Type", "application/json")
+              req.add_header("User-Agent", "ai-code-review-bot")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except Exception as e:
+                  print(f"GitHub API POST error for {endpoint}: {e}", flush=True)
+                  return {}
+
+          # === Collect PR data via GitHub API ===
+          print("Collecting changed files...", flush=True)
+          files_resp = gh_api(f"repos/{repo_full}/pulls/{pr_number}/files")
+          if files_resp:
+              files_data = json.loads(files_resp)
+              changed_files = "\n".join(
+                  f"- {f['filename']} (+{f['additions']} -{f['deletions']})"
+                  for f in files_data
+              )
+          else:
+              changed_files = "(无法获取文件列表)"
+
+          print("Collecting diff...", flush=True)
+          detailed_diff = gh_api(
+              f"repos/{repo_full}/pulls/{pr_number}",
+              accept="application/vnd.github.v3.diff"
+          )
+          # Limit diff size to prevent token overflow
+          if detailed_diff and len(detailed_diff) > 20000:
+              detailed_diff = detailed_diff[:20000] + "\n... (diff 已截断，超过 20000 字符)"
+          diff_lines = len(detailed_diff.splitlines()) if detailed_diff else 0
+          print(f"Diff lines: {diff_lines}", flush=True)
+
+          print("Collecting commits...", flush=True)
+          commits_resp = gh_api(f"repos/{repo_full}/pulls/{pr_number}/commits")
+          if commits_resp:
+              commits_data = json.loads(commits_resp)
+              commits = "\n".join(
+                  f"- {c['commit']['message'].split(chr(10))[0]}"
+                  for c in commits_data
+              )
+          else:
+              commits = "(无法获取 commit 历史)"
+
+          # === Safety check ===
+          if not detailed_diff or diff_lines < 3:
+              print("Diff is empty, skipping review...", flush=True)
+              gh_api_post(f"repos/{repo_full}/issues/{pr_number}/comments", {
+                  "body": "## 🤖 AI Code Review\n\n⚠️ 无法获取到代码变更内容（diff 为空），跳过此次 review。\n\n---\n*Powered by DeepSeek | Reviewed by beeforge-review-ai*"
+              })
+              sys.exit(0)
+
+          # === Call DeepSeek API ===
           prompt = f"""你是一个资深的 code reviewer。请用中文对以下 Pull Request 进行全面的 code review。
 
           ## PR 信息
@@ -144,75 +180,56 @@ jobs:
               "max_tokens": 4096
           }).encode("utf-8")
 
-          req = urllib.request.Request(
-              "https://api.deepseek.com/chat/completions",
-              data=payload,
-              headers={
-                  "Authorization": f"Bearer {api_key}",
-                  "Content-Type": "application/json"
-              }
-          )
-
-          print("Sending review request to DeepSeek...", flush=True)
+          print("Calling DeepSeek API...", flush=True)
+          review_body = ""
           try:
+              req = urllib.request.Request(
+                  "https://api.deepseek.com/chat/completions",
+                  data=payload,
+                  headers={
+                      "Authorization": f"Bearer {api_key}",
+                      "Content-Type": "application/json"
+                  }
+              )
               with urllib.request.urlopen(req, timeout=120) as resp:
                   result = json.loads(resp.read().decode("utf-8"))
                   if "choices" in result and len(result["choices"]) > 0:
-                      print(result["choices"][0]["message"]["content"])
+                      review_body = result["choices"][0]["message"]["content"]
                   elif "error" in result:
-                      print(f"API Error: {result['error']}")
+                      review_body = f"API Error: {result['error']}"
                   else:
-                      print("No review content received from API")
+                      review_body = "No review content received from API"
           except Exception as e:
-              print(f"Failed to call DeepSeek API: {e}")
+              review_body = f"Failed to call DeepSeek API: {e}"
+
+          print(f"Review result length: {len(review_body)} chars", flush=True)
+
+          # === Handle errors ===
+          if not review_body or "API Error" in review_body or "Failed to call" in review_body:
+              print("Review failed, posting error comment...", flush=True)
+              gh_api_post(f"repos/{repo_full}/issues/{pr_number}/comments", {
+                  "body": f"## 🤖 AI Code Review\n\n❌ Review 过程中出错：\n\n```\n{review_body}\n```\n\n---\n*Powered by DeepSeek | Reviewed by beeforge-review-ai*"
+              })
+              sys.exit(1)
+
+          # === Post review comment ===
+          print("Posting review comment...", flush=True)
+          comment_body = f"## 🤖 AI Code Review\n\n{review_body}\n\n---\n*Powered by DeepSeek | Reviewed by beeforge-review-ai*"
+          gh_api_post(f"repos/{repo_full}/issues/{pr_number}/comments", {"body": comment_body})
+
+          # === Submit review (APPROVE or REQUEST_CHANGES) ===
+          if "REQUEST_CHANGES" in review_body or "request changes" in review_body:
+              print("Submitting REQUEST_CHANGES review...", flush=True)
+              gh_api_post(f"repos/{repo_full}/pulls/{pr_number}/reviews", {
+                  "event": "REQUEST_CHANGES",
+                  "body": "🤖 AI Code Review: 建议修改后再合并。详见上方评论。"
+              })
+          else:
+              print("Submitting APPROVE review...", flush=True)
+              gh_api_post(f"repos/{repo_full}/pulls/{pr_number}/reviews", {
+                  "event": "APPROVE",
+                  "body": "🤖 AI Code Review: 代码质量通过审查。详见上方评论。"
+              })
+
+          print("=== Review completed ===", flush=True)
           PYEOF
-          )
-
-          echo "=== Review Result ==="
-          echo "${REVIEW_BODY}"
-
-          # Check if review body is empty or error
-          if [ -z "${REVIEW_BODY}" ] || echo "${REVIEW_BODY}" | grep -qi "API Error\|Failed to call"; then
-            echo "Review failed, posting error comment..."
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              --method POST \
-              --field body="## 🤖 AI Code Review
-
-          ❌ Review 过程中出错：
-
-          \`\`\`
-          ${REVIEW_BODY}
-          \`\`\`
-
-          ---
-          *Powered by DeepSeek | Reviewed by beeforge-review-ai*"
-            exit 1
-          fi
-
-          echo "=== Posting review comment ==="
-          # Post as PR comment
-          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --method POST \
-            --field body="## 🤖 AI Code Review
-
-          ${REVIEW_BODY}
-
-          ---
-          *Powered by DeepSeek | Reviewed by beeforge-review-ai*"
-
-          # Determine conclusion and submit review
-          if echo "${REVIEW_BODY}" | grep -qi "REQUEST_CHANGES\|request changes"; then
-            echo "Submitting REQUEST_CHANGES review..."
-            gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-              --method POST \
-              --field event="REQUEST_CHANGES" \
-              --field body="🤖 AI Code Review: 建议修改后再合并。详见上方评论。" || true
-          else
-            echo "Submitting APPROVE review..."
-            gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-              --method POST \
-              --field event="APPROVE" \
-              --field body="🤖 AI Code Review: 代码质量通过审查。详见上方评论。" || true
-          fi
-
-          echo "=== Review completed ==="
