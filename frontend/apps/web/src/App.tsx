@@ -20,12 +20,12 @@ export function App() {
               <div className="px-4 lg:px-6">
                 <div className="flex flex-col gap-4 rounded-lg border bg-card p-6 text-sm leading-loose shadow-sm">
                   <div>
-                    <h1 className="font-medium text-lg">Project ready!</h1>
-                    <p>You may now add components and start building.</p>
+                    <h1 className="font-medium text-lg">OpenWork ready!</h1>
+                    <p>AI-powered development workspace.</p>
                     <p>
-                      We&apos;ve already added the button component for you.
+                      Start building with shared components and tools.
                     </p>
-                    <Button className="mt-2">Button</Button>
+                    <Button className="mt-2">Get Started</Button>
                   </div>
                   <div className="text-muted-foreground font-mono text-xs">
                     (Press <kbd>d</kbd> to toggle dark mode)

@@ -251,10 +251,10 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
             Reviewer
           </Label>
           <Select
-            items={[
-              { label: "Eddie Lake", value: "Eddie Lake" },
-              { label: "Jamik Tashpulatov", value: "Jamik Tashpulatov" },
-            ]}
+              items={[
+                { label: "Nuts Jian", value: "Nuts Jian" },
+                { label: "Dev AI", value: "Dev AI" },
+              ]}
           >
             <SelectTrigger
               className="w-38 **:data-[slot=select-value]:block **:data-[slot=select-value]:truncate"
@@ -265,9 +265,9 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
             </SelectTrigger>
             <SelectContent align="end">
               <SelectGroup>
-                <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-                <SelectItem value="Jamik Tashpulatov">
-                  Jamik Tashpulatov
+                <SelectItem value="Nuts Jian">Nuts Jian</SelectItem>
+                <SelectItem value="Dev AI">
+                  Dev AI
                 </SelectItem>
               </SelectGroup>
             </SelectContent>
@@ -390,7 +390,7 @@ export function DataTable({
   }
   return (
     <Tabs
-      defaultValue="outline"
+      defaultValue="overview"
       className="w-full flex-col justify-start gap-6"
     >
       <div className="flex items-center justify-between px-4 lg:px-6">
@@ -398,12 +398,12 @@ export function DataTable({
           View
         </Label>
         <Select
-          defaultValue="outline"
+      defaultValue="overview"
           items={[
-            { label: "Outline", value: "outline" },
-            { label: "Past Performance", value: "past-performance" },
-            { label: "Key Personnel", value: "key-personnel" },
-            { label: "Focus Documents", value: "focus-documents" },
+            { label: "Overview", value: "overview" },
+            { label: "Sprint Board", value: "sprint-board" },
+            { label: "Contributors", value: "contributors" },
+            { label: "Dependencies", value: "dependencies" },
           ]}
         >
           <SelectTrigger
@@ -415,22 +415,26 @@ export function DataTable({
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
-              <SelectItem value="outline">Outline</SelectItem>
-              <SelectItem value="past-performance">Past Performance</SelectItem>
-              <SelectItem value="key-personnel">Key Personnel</SelectItem>
-              <SelectItem value="focus-documents">Focus Documents</SelectItem>
+              <SelectItem value="overview">Overview</SelectItem>
+              <SelectItem value="sprint-board">
+                Sprint Board <Badge variant="secondary">3</Badge>
+              </SelectItem>
+              <SelectItem value="contributors">
+                Contributors <Badge variant="secondary">2</Badge>
+              </SelectItem>
+              <SelectItem value="dependencies">Dependencies</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
         <TabsList className="hidden **:data-[slot=badge]:size-5 **:data-[slot=badge]:rounded-full **:data-[slot=badge]:bg-muted-foreground/30 **:data-[slot=badge]:px-1 @4xl/main:flex">
-          <TabsTrigger value="outline">Outline</TabsTrigger>
-          <TabsTrigger value="past-performance">
-            Past Performance <Badge variant="secondary">3</Badge>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="sprint-board">
+            Sprint Board <Badge variant="secondary">3</Badge>
           </TabsTrigger>
-          <TabsTrigger value="key-personnel">
-            Key Personnel <Badge variant="secondary">2</Badge>
+          <TabsTrigger value="contributors">
+            Contributors <Badge variant="secondary">2</Badge>
           </TabsTrigger>
-          <TabsTrigger value="focus-documents">Focus Documents</TabsTrigger>
+          <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
         </TabsList>
         <div className="flex items-center gap-2">
           <DropdownMenu>
@@ -472,8 +476,8 @@ export function DataTable({
           </Button>
         </div>
       </div>
-      <TabsContent
-        value="outline"
+        <TabsContent
+          value="overview"
         className="relative flex flex-col gap-4 overflow-auto px-4 lg:px-6"
       >
         <div className="overflow-hidden rounded-lg border">
@@ -616,16 +620,16 @@ export function DataTable({
         </div>
       </TabsContent>
       <TabsContent
-        value="past-performance"
+        value="sprint-board"
         className="flex flex-col px-4 lg:px-6"
       >
         <div className="aspect-video w-full flex-1 rounded-lg border border-dashed"></div>
       </TabsContent>
-      <TabsContent value="key-personnel" className="flex flex-col px-4 lg:px-6">
+      <TabsContent value="contributors" className="flex flex-col px-4 lg:px-6">
         <div className="aspect-video w-full flex-1 rounded-lg border border-dashed"></div>
       </TabsContent>
       <TabsContent
-        value="focus-documents"
+        value="dependencies"
         className="flex flex-col px-4 lg:px-6"
       >
         <div className="aspect-video w-full flex-1 rounded-lg border border-dashed"></div>
@@ -667,11 +671,11 @@ const chartData = [
 ]
 const chartConfig = {
   desktop: {
-    label: "Desktop",
+    label: "Commits",
     color: "var(--primary)",
   },
   mobile: {
-    label: "Mobile",
+    label: "PRs",
     color: "var(--primary)",
   },
 } satisfies ChartConfig
@@ -684,7 +688,7 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
         <DrawerHeader className="gap-1">
           <DrawerTitle>{item.header}</DrawerTitle>
           <DrawerDescription>
-            Showing total visitors for the last 6 months
+            Showing activity for the last 6 months
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex flex-col gap-4 overflow-y-auto px-4 text-sm">
@@ -737,7 +741,7 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
                   <TrendUpIcon className="size-4" />
                 </div>
                 <div className="text-muted-foreground">
-                  Showing total visitors for the last 6 months. This is just
+                  Showing activity for the last 6 months. This is just
                   some random text to test the layout. It spans multiple lines
                   and should wrap around.
                 </div>
@@ -756,17 +760,17 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
                 <Select
                   defaultValue={item.type}
                   items={[
-                    { label: "Table of Contents", value: "Table of Contents" },
-                    { label: "Executive Summary", value: "Executive Summary" },
+                    { label: "Feature", value: "Feature" },
+                    { label: "Bug Fix", value: "Bug Fix" },
                     {
-                      label: "Technical Approach",
-                      value: "Technical Approach",
+                      label: "Refactor",
+                      value: "Refactor",
                     },
                     { label: "Design", value: "Design" },
-                    { label: "Capabilities", value: "Capabilities" },
-                    { label: "Focus Documents", value: "Focus Documents" },
-                    { label: "Narrative", value: "Narrative" },
-                    { label: "Cover Page", value: "Cover Page" },
+                    { label: "Infrastructure", value: "Infrastructure" },
+                    { label: "Documentation", value: "Documentation" },
+                    { label: "Config", value: "Config" },
+                    { label: "Test", value: "Test" },
                   ]}
                 >
                   <SelectTrigger id="type" className="w-full">
@@ -775,21 +779,21 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value="Table of Contents">
-                        Table of Contents
+                        Feature
                       </SelectItem>
                       <SelectItem value="Executive Summary">
-                        Executive Summary
+                        Bug Fix
                       </SelectItem>
                       <SelectItem value="Technical Approach">
-                        Technical Approach
+                        Refactor
                       </SelectItem>
                       <SelectItem value="Design">Design</SelectItem>
-                      <SelectItem value="Capabilities">Capabilities</SelectItem>
+                      <SelectItem value="Capabilities">Infrastructure</SelectItem>
                       <SelectItem value="Focus Documents">
-                        Focus Documents
+                        Documentation
                       </SelectItem>
-                      <SelectItem value="Narrative">Narrative</SelectItem>
-                      <SelectItem value="Cover Page">Cover Page</SelectItem>
+                      <SelectItem value="Narrative">Config</SelectItem>
+                      <SelectItem value="Cover Page">Test</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -831,22 +835,22 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
               <Label htmlFor="reviewer">Reviewer</Label>
               <Select
                 defaultValue={item.reviewer}
-                items={[
-                  { label: "Eddie Lake", value: "Eddie Lake" },
-                  { label: "Jamik Tashpulatov", value: "Jamik Tashpulatov" },
-                  { label: "Emily Whalen", value: "Emily Whalen" },
-                ]}
+                  items={[
+                    { label: "Nuts Jian", value: "Nuts Jian" },
+                    { label: "Dev AI", value: "Dev AI" },
+                    { label: "Beeforge AI", value: "Beeforge AI" },
+                  ]}
               >
                 <SelectTrigger id="reviewer" className="w-full">
                   <SelectValue placeholder="Select a reviewer" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-                    <SelectItem value="Jamik Tashpulatov">
-                      Jamik Tashpulatov
+                    <SelectItem value="Nuts Jian">Nuts Jian</SelectItem>
+                    <SelectItem value="Dev AI">
+                      Dev AI
                     </SelectItem>
-                    <SelectItem value="Emily Whalen">Emily Whalen</SelectItem>
+                    <SelectItem value="Beeforge AI">Beeforge AI</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>

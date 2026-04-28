@@ -17,13 +17,13 @@ import { SquaresFourIcon, ListIcon, ChartBarIcon, FolderIcon, UsersIcon, CameraI
 
 const data = {
   user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
+    name: "Dev AI",
+    email: "dev@openwork.ai",
+    avatar: "/avatars/openwork.jpg",
   },
   navMain: [
     {
-      title: "Dashboard",
+      title: "Workspace",
       url: "#",
       icon: (
         <SquaresFourIcon
@@ -31,7 +31,7 @@ const data = {
       ),
     },
     {
-      title: "Lifecycle",
+      title: "Tasks",
       url: "#",
       icon: (
         <ListIcon
@@ -39,7 +39,7 @@ const data = {
       ),
     },
     {
-      title: "Analytics",
+      title: "Insights",
       url: "#",
       icon: (
         <ChartBarIcon
@@ -55,7 +55,7 @@ const data = {
       ),
     },
     {
-      title: "Team",
+      title: "Contributors",
       url: "#",
       icon: (
         <UsersIcon
@@ -65,7 +65,7 @@ const data = {
   ],
   navClouds: [
     {
-      title: "Capture",
+      title: "Snippets",
       icon: (
         <CameraIcon
         />
@@ -74,17 +74,17 @@ const data = {
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Recent",
           url: "#",
         },
         {
-          title: "Archived",
+          title: "Saved",
           url: "#",
         },
       ],
     },
     {
-      title: "Proposal",
+      title: "Specs",
       icon: (
         <FileTextIcon
         />
@@ -92,7 +92,7 @@ const data = {
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Active Specs",
           url: "#",
         },
         {
@@ -110,7 +110,7 @@ const data = {
       url: "#",
       items: [
         {
-          title: "Active Proposals",
+          title: "Active Prompts",
           url: "#",
         },
         {
@@ -156,7 +156,7 @@ const data = {
       ),
     },
     {
-      name: "Reports",
+      name: "Dev Logs",
       url: "#",
       icon: (
         <ChartLineIcon
@@ -164,7 +164,7 @@ const data = {
       ),
     },
     {
-      name: "Word Assistant",
+      name: "Code Assistant",
       url: "#",
       icon: (
         <FileIcon
@@ -184,7 +184,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               render={<a href="#" />}
             >
               <CommandIcon className="size-5!" />
-              <span className="text-base font-semibold">Acme Inc.</span>
+              <span className="text-base font-semibold">OpenWork</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
