@@ -194,11 +194,7 @@ function SidebarContentArea() {
   const activeSubApp = getSubAppByPath(location.pathname)
 
   if (activeSubApp?.id === 'virevo') {
-    return (
-      <SidebarContent>
-        <VirevoNavContent />
-      </SidebarContent>
-    )
+    return <VirevoNavContent />
   }
 
   return (

@@ -9,10 +9,16 @@ import {
   ClockCounterClockwiseIcon,
   ArrowRightIcon,
   ListChecksIcon,
-  CaretDownIcon,
-  CaretRightIcon,
 } from '@phosphor-icons/react'
-import { cn } from '@workspace/ui/lib/utils'
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@workspace/ui/components/sidebar'
 
 interface NavItem {
   title: string
@@ -22,14 +28,12 @@ interface NavItem {
 
 interface NavGroup {
   title: string
-  icon: React.ReactNode
   items: NavItem[]
 }
 
 export const virevoNavGroups: NavGroup[] = [
   {
     title: '需求讨论',
-    icon: <ChatCircleDotsIcon className="size-4" />,
     items: [
       {
         title: '项目列表',
@@ -45,7 +49,6 @@ export const virevoNavGroups: NavGroup[] = [
   },
   {
     title: 'Scrum 管理',
-    icon: <KanbanIcon className="size-4" />,
     items: [
       {
         title: '项目看板',
@@ -71,7 +74,6 @@ export const virevoNavGroups: NavGroup[] = [
   },
   {
     title: 'OpenSpec 文档',
-    icon: <FileTextIcon className="size-4" />,
     items: [
       {
         title: '项目文档',
@@ -87,81 +89,37 @@ export const virevoNavGroups: NavGroup[] = [
   },
 ]
 
-export function VirevoNavContent() {
-  const location = useLocation()
-
-  return (
-    <nav className="flex flex-col gap-1 overflow-y-auto p-2">
-      {virevoNavGroups.map((group) => {
-        const hasActive = group.items.some((item) =>
-          location.pathname.startsWith(item.path.split('/:')[0]),
-        )
-
-        return <NavGroupItem key={group.title} group={group} hasActive={hasActive} />
-      })}
-    </nav>
-  )
+function isActivePath(pathname: string, itemPath: string): boolean {
+  return pathname.startsWith(itemPath.split('/:')[0])
 }
 
-function NavGroupItem({
-  group,
-  hasActive: hasActiveProp,
-}: {
-  group: NavGroup
-  hasActive?: boolean
-}) {
+export function VirevoNavContent() {
   const location = useLocation()
-  const [isOpen, setIsOpen] = React.useState(() =>
-    group.items.some((item) =>
-      location.pathname.startsWith(item.path.split('/:')[0]),
-    ),
-  )
-
-  const hasActive = hasActiveProp ?? group.items.some((item) =>
-    location.pathname.startsWith(item.path.split('/:')[0]),
-  )
+  const pathname = location?.pathname ?? ''
 
   return (
-    <div className="flex flex-col">
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className={cn(
-          'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent',
-          hasActive && 'text-accent-foreground',
-          !hasActive && 'text-muted-foreground',
-        )}
-      >
-        {isOpen ? (
-          <CaretDownIcon className="size-3 shrink-0" />
-        ) : (
-          <CaretRightIcon className="size-3 shrink-0" />
-        )}
-        {group.icon}
-        <span>{group.title}</span>
-      </button>
-      {isOpen && (
-        <div className="ml-4 flex flex-col gap-0.5 border-l pl-2">
-          {group.items.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              end={false}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent',
-                  isActive
-                    ? 'bg-accent text-accent-foreground font-medium'
-                    : 'text-muted-foreground',
-                )
-              }
-            >
-              {item.icon}
-              <span>{item.title}</span>
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </div>
+    <SidebarContent>
+      {virevoNavGroups.map((group) => (
+        <SidebarGroup key={group.title}>
+          <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {group.items.map((item) => (
+                <SidebarMenuItem key={item.path}>
+                  <SidebarMenuButton
+                    render={<NavLink to={item.path} />}
+                    isActive={isActivePath(pathname, item.path)}
+                    tooltip={item.title}
+                  >
+                    {item.icon}
+                    <span>{item.title}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      ))}
+    </SidebarContent>
   )
 }
