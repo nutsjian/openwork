@@ -7,7 +7,7 @@ const app = new Hono()
 
 // ── GET /projects/:projectId/minutes (list by project) ──────────
 
-app.get('/:id', async (c) => {
+app.get('/:id/minutes', async (c) => {
   const id = c.req.param('id')
   const minutes = await db
     .select()
