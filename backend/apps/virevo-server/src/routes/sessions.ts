@@ -1,8 +1,12 @@
 // @ts-nocheck
-// Mastra v1.28 runtime types (Run, Workflow.resume) don't fully expose
-// in the public type definitions. Validated at runtime.
+// Mastra v1.28 runtime types have gaps:
+// - WorkflowRunOutput.stream property not in public types (but exists at runtime)
+// - resumeStream options (closeOnSuspend) not fully typed
+// - extractRequirementsTool.execute parameter types mismatch
+// All patterns validated at runtime.
 
 import { Hono } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/db'
@@ -46,25 +50,23 @@ app.post('/', async (c) => {
     })
     .returning()
 
-  // Start the Mastra workflow — it will suspend at userTurn immediately
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
   const run = await workflow.createRun()
-  await run.start({
+  const result = await run.start({
     inputData: {
       projectId: parsed.data.projectId,
       sessionTitle: parsed.data.title,
     },
   })
 
-  // Persist the workflow run ID
   await db
     .update(sessions)
     .set({ mastraRunId: run.runId })
     .where(eq(sessions.id, session.id))
 
   return c.json(
-    { ...session, mastraRunId: run.runId, status: run.status },
+    { ...session, mastraRunId: run.runId, status: result.status },
     201,
   )
 })
@@ -73,7 +75,10 @@ app.post('/', async (c) => {
 
 app.get('/:id', async (c) => {
   const id = c.req.param('id')
-  const [session] = await db.select().from(sessions).where(eq(sessions.id, id))
+  const [session] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
 
   if (!session) {
     return c.json({ error: 'Session not found' }, 404)
@@ -86,6 +91,69 @@ app.get('/:id', async (c) => {
     .orderBy(messages.timestamp)
 
   return c.json({ ...session, messages: msgs })
+})
+
+// ── GET /sessions/:id/stream (SSE streaming) ────────────────────
+
+app.get('/:id/stream', async (c) => {
+  const id = c.req.param('id')
+
+  const [session] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404)
+  }
+
+  const m = getMastra()
+  const workflow = m.getWorkflow('brainstorm-session')
+  const run = await workflow.createRun({ runId: session.mastraRunId! })
+
+  return streamSSE(c, async (stream) => {
+    try {
+      const output = run.resumeStream({
+        step: 'user-turn',
+        resumeData: { message: '' },
+        closeOnSuspend: true,
+      })
+
+      // WorkflowRunOutput exposes a ReadableStream at runtime
+      // even though the public types don't declare it
+      const reader = (output as any).stream.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        if (value?.type === 'step-result' && value?.id === 'ai-turn') {
+          const aiMessage = value?.payload?.output?.aiMessage
+          if (aiMessage) {
+            await db.insert(messages).values({
+              sessionId: id,
+              participantId: 'ai',
+              content: aiMessage,
+              type: 'ai',
+            })
+            await stream.writeSSE({
+              data: JSON.stringify({ aiMessage }),
+            })
+          }
+        } else if (value?.type === 'step-suspended') {
+          await stream.writeSSE({
+            event: 'suspended',
+            data: JSON.stringify({ step: value.id }),
+          })
+        }
+      }
+    } catch (err: any) {
+      console.error('[sessions] Stream error:', err.message)
+      await stream.writeSSE({
+        event: 'error',
+        data: JSON.stringify({ error: err.message }),
+      })
+    }
+  })
 })
 
 // ── POST /sessions/:id/messages (send message + resume) ────────
@@ -108,7 +176,6 @@ app.post('/:id/messages', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  // Save user message to DB
   const [savedMessage] = await db
     .insert(messages)
     .values({
@@ -144,7 +211,9 @@ app.post('/:id/messages', async (c) => {
     Object.keys(result.steps || {}),
   )
 
-  const aiMessage = result.steps?.['ai-turn']?.output?.aiMessage
+  const aiTurnStep = result.steps?.['ai-turn'] as any
+  const aiMessage = aiTurnStep?.output?.aiMessage ?? null
+
   if (aiMessage) {
     await db.insert(messages).values({
       sessionId: id,
@@ -201,7 +270,6 @@ app.post('/:id/end', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  // Resume with endSession flag
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
   const run = await workflow.createRun({ runId: session.mastraRunId! })
@@ -210,7 +278,6 @@ app.post('/:id/end', async (c) => {
     resumeData: { endSession: true },
   })
 
-  // Mark session as completed
   await db
     .update(sessions)
     .set({ status: 'completed', endedAt: new Date() })
@@ -234,16 +301,12 @@ app.post('/:id/extract', async (c) => {
     return c.json({ epics: [] })
   }
 
-  // @ts-expect-error Mastra Tool.execute type mismatch — works at runtime
-  const result: any = await extractRequirementsTool.execute(
-    {
-      conversationHistory: msgs.map((m: any) => ({
-        role: m.type === 'user' ? 'user' : 'assistant',
-        content: m.content,
-      })),
-    },
-    undefined,
-  )
+  const result = await extractRequirementsTool.execute({
+    conversationHistory: msgs.map((m) => ({
+      role: m.type === 'user' ? 'user' : 'assistant',
+      content: m.content,
+    })),
+  })
 
   return c.json(result)
 })

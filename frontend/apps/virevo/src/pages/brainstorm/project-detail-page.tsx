@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
-import { ChatCircleDotsIcon, ClockCounterClockwiseIcon, ListChecksIcon, PlusIcon } from '@phosphor-icons/react'
+import { ChatCircleDotsIcon, ClockCounterClockwiseIcon, ListChecksIcon } from '@phosphor-icons/react'
 import { Button } from '@workspace/ui/components/button'
 import { api } from '@/lib/api'
 

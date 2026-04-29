@@ -5,27 +5,25 @@ import { meetingMinutes } from '@/db/schema'
 
 const app = new Hono()
 
-// ── GET /minutes (by project) ────────────────────────────────────
+// ── GET /projects/:projectId/minutes (list by project) ──────────
 
-app.get('/', async (c) => {
-  const projectId = c.req.query('projectId')
-
-  if (!projectId) {
-    return c.json({ error: 'projectId query param required' }, 400)
-  }
-
+app.get('/:id', async (c) => {
+  const id = c.req.param('id')
   const minutes = await db
     .select()
     .from(meetingMinutes)
-    .where(eq(meetingMinutes.projectId, projectId))
+    .where(eq(meetingMinutes.projectId, id))
     .orderBy(desc(meetingMinutes.createdAt))
 
   return c.json(minutes)
 })
 
-// ── GET /minutes/:id ────────────────────────────────────────────
+// ── GET /:id (single minutes detail) ────────────────────────────
+// Mounted as /api/v1/minutes/:id
 
-app.get('/:id', async (c) => {
+const detailApp = new Hono()
+
+detailApp.get('/:id', async (c) => {
   const id = c.req.param('id')
   const [minutes] = await db
     .select()
@@ -39,4 +37,4 @@ app.get('/:id', async (c) => {
   return c.json(minutes)
 })
 
-export { app as minuteRoutes }
+export { app as projectMinuteRoutes, detailApp as minuteRoutes }

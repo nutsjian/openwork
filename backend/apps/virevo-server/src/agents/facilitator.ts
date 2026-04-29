@@ -26,6 +26,6 @@ export const facilitatorAgent = new Agent({
   id: 'facilitator',
   name: 'Facilitator',
   instructions: FACILITATOR_INSTRUCTIONS,
-  model: 'zhipuai/glm-5v-turbo',
+  model: 'zhipuai-coding-plan/glm-5-turbo',
   tools: { extractRequirements: extractRequirementsTool },
 })

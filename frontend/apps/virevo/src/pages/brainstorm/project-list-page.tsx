@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { PlusIcon } from '@phosphor-icons/react'
 import {
   Button,
@@ -51,11 +51,9 @@ export function ProjectListPage() {
           </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <PlusIcon className="size-4" />
-              新建项目
-            </Button>
+          <DialogTrigger render={<Button />}>
+            <PlusIcon className="size-4" />
+            新建项目
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>

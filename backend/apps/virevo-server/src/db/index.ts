@@ -1,6 +1,8 @@
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
+
+// Self-load dotenv — this module may be imported before index.ts loads dotenv
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.resolve(__dirname, '../../../../.env') })
 
