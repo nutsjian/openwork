@@ -54,11 +54,8 @@ export const extractRequirementsTool = createTool({
       .map((m: any) => `[${m.role}]: ${m.content}`)
       .join('\n')
 
-    const response = await agent.generate({
-      messages: [
-        {
-          role: 'user',
-          content: `请分析以下对话记录，提取其中涉及的所有需求，并按照 Epic → Feature → User Story 的层级结构进行整理。
+    const response = await agent.generate(
+      `请分析以下对话记录，提取其中涉及的所有需求，并按照 Epic → Feature → User Story 的层级结构进行整理。
 
 要求：
 1. 每个需求必须来自对话中明确提到的内容
@@ -91,9 +88,7 @@ export const extractRequirementsTool = createTool({
 
 对话记录：
 ${conversationText}`,
-        },
-      ],
-    })
+    )
 
     const text =
       typeof response === 'string'

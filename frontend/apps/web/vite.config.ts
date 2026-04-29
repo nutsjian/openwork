@@ -100,4 +100,17 @@ function workspaceAlias(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [workspaceAlias(), react(), tailwindcss()],
+  define: {
+    'import.meta.env.VITE_API_URL': JSON.stringify(''),
+  },
+  server: {
+    host: '0.0.0.0',
+    port: 15179,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:13179',
+        changeOrigin: true,
+      },
+    },
+  }
 })

@@ -1,33 +1,35 @@
 // @ts-nocheck
-// Mastra v1.28 types have complex circular references that don't resolve
-// correctly with strict mode. We disable implicit any checks and validate
-// at runtime instead.
 
 import { createWorkflow, createStep } from '@mastra/core/workflows'
 import { z } from 'zod'
 import { Mastra } from '@mastra/core'
 import { Agent } from '@mastra/core/agent'
+import { PostgresStore } from '@mastra/pg'
 import { extractRequirementsTool } from '@/tools/extract-requirements'
 
-// ── Schemas ──────────────────────────────────────────────────────
+const messageSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string(),
+})
 
 const triggerSchema = z.object({
   projectId: z.string().uuid(),
   sessionTitle: z.string().optional().default('需求讨论会'),
 })
 
-// ── Steps ────────────────────────────────────────────────────────
-
 const userTurn = createStep({
   id: 'user-turn',
   inputSchema: z.object({
-    projectId: z.string().uuid(),
+    projectId: z.string().uuid().optional(),
+    sessionTitle: z.string().optional(),
+    conversationHistory: z.array(messageSchema).optional().default([]),
     message: z.string().optional(),
     endSession: z.boolean().optional().default(false),
   }),
   outputSchema: z.object({
     message: z.string().optional(),
     endSession: z.boolean(),
+    conversationHistory: z.array(messageSchema),
   }),
   suspendSchema: z.object({
     prompt: z.string(),
@@ -37,18 +39,24 @@ const userTurn = createStep({
     endSession: z.boolean().optional().default(false),
   }),
   execute: async ({ inputData, suspend, resumeData }: any) => {
-    // If resuming with user message, pass it along
+    const history = inputData.conversationHistory || []
+
     if (resumeData) {
       const { message, endSession } = resumeData
-      return { message, endSession: endSession ?? false }
+      const updatedHistory = message
+        ? [...history, { role: 'user' as const, content: message }]
+        : history
+      return {
+        message,
+        endSession: endSession ?? false,
+        conversationHistory: updatedHistory,
+      }
     }
 
-    // If ending session, signal it
     if (inputData.endSession) {
-      return { endSession: true }
+      return { endSession: true, conversationHistory: history }
     }
 
-    // Otherwise suspend and wait for user input
     return await suspend({ prompt: '轮到你了，请发言' })
   },
 })
@@ -57,21 +65,11 @@ const aiTurn = createStep({
   id: 'ai-turn',
   inputSchema: z.object({
     message: z.string(),
-    conversationHistory: z.array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string(),
-      }),
-    ),
+    conversationHistory: z.array(messageSchema),
   }),
   outputSchema: z.object({
     aiMessage: z.string(),
-    conversationHistory: z.array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string(),
-      }),
-    ),
+    conversationHistory: z.array(messageSchema),
   }),
   execute: async ({ inputData, mastra: m }: any) => {
     const agent: any = m.getAgent('facilitator')
@@ -82,17 +80,20 @@ const aiTurn = createStep({
       { role: 'user' as const, content: message },
     ]
 
-    const response = await agent.generate({
-      messages: updatedHistory.map((msg: any) => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-      })),
-    })
+    const historyText = updatedHistory
+      .map((msg: any) =>
+        `[${msg.role === 'user' ? '用户' : 'AI'}]: ${msg.content}`,
+      )
+      .join('\n')
+
+    const prompt = `以下是我们的对话历史：\n${historyText}\n\n请根据以上对话继续回应，作为产品经理引导讨论。直接回复，不要重复对话历史。`
+
+    const response = await agent.generate(prompt)
 
     const aiMessage =
       typeof response === 'string'
         ? response
-        : (response.text ?? '（AI 未返回内容）')
+        : response.text ?? '（AI 未返回内容）'
 
     return {
       aiMessage,
@@ -107,12 +108,7 @@ const aiTurn = createStep({
 const endSession = createStep({
   id: 'end-session',
   inputSchema: z.object({
-    conversationHistory: z.array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string(),
-      }),
-    ),
+    conversationHistory: z.array(messageSchema),
   }),
   outputSchema: z.object({
     minutes: z.string(),
@@ -120,11 +116,14 @@ const endSession = createStep({
   execute: async ({ inputData, mastra: m }: any) => {
     const agent: any = m.getAgent('facilitator')
 
-    const response = await agent.generate({
-      messages: [
-        {
-          role: 'user',
-          content: `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
+    const historyText = inputData.conversationHistory
+      .map((m: any) =>
+        `[${m.role === 'user' ? '用户' : 'AI'}]: ${m.content}`,
+      )
+      .join('\n')
+
+    const response = await agent.generate(
+      `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
 - 会议日期
 - 参与者
 - 讨论摘要
@@ -133,43 +132,47 @@ const endSession = createStep({
 - 行动项
 
 对话记录：
-${inputData.conversationHistory.map((m: any) => `[${m.role}]: ${m.content}`).join('\n')}`,
-        },
-      ],
-    })
+${historyText}`,
+    )
 
     const minutes =
       typeof response === 'string'
         ? response
-        : (response.text ?? '（生成失败）')
+        : response.text ?? '（生成失败）'
 
     return { minutes }
   },
 })
 
-// ── Workflow ─────────────────────────────────────────────────────
-
-// Create Mastra instance lazily to avoid circular reference
 let _mastra: Mastra | null = null
 
 function getMastra(): Mastra {
   if (!_mastra) {
+    const storage = new PostgresStore({
+      id: 'virevo-store',
+      connectionString: process.env.DATABASE_URL!,
+    })
+
     _mastra = new Mastra({
+      storage,
       agents: {
         facilitator: new Agent({
           id: 'facilitator',
           name: 'Facilitator',
           instructions: `你是一位经验丰富的产品经理，专门帮助团队从模糊的想法中梳理出清晰的需求。使用中文交流。`,
-          model: 'zhipuai/glm-5v-turbo',
+          model: 'zhipuai/glm-5.1',
           tools: { extractRequirements: extractRequirementsTool },
         }),
       },
+    })
+
+    storage.init().catch((err) => {
+      console.error('Failed to initialize PostgresStore:', err)
     })
   }
   return _mastra
 }
 
-// Register the workflow with the mastra instance
 const wf = createWorkflow({
   id: 'brainstorm-session',
   triggerSchema,

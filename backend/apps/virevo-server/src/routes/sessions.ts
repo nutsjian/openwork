@@ -12,6 +12,11 @@ import { extractRequirementsTool } from '@/tools/extract-requirements'
 
 const app = new Hono()
 
+app.onError((err, c) => {
+  console.error('[sessions] Error:', err)
+  return c.json({ error: err.message || 'Internal Server Error' }, 500)
+})
+
 // ── Validators ────────────────────────────────────────────────────
 
 const createSessionSchema = z.object({
@@ -114,17 +119,44 @@ app.post('/:id/messages', async (c) => {
     })
     .returning()
 
-  // Resume the workflow at userTurn with the message
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
-  const result = await workflow.resume({
-    runId: session.mastraRunId!,
-    step: 'user-turn',
-    resumeData: { message: parsed.data.content },
-  })
+  const run = await workflow.createRun({ runId: session.mastraRunId! })
+  let result
+  try {
+    result = await run.resume({
+      step: 'user-turn',
+      resumeData: { message: parsed.data.content },
+    })
+  } catch (err: any) {
+    console.error('[sessions] Workflow resume error:', err.message)
+    console.error(err.stack?.substring(0, 500))
+    return c.json(
+      { error: `Workflow error: ${err.message}`, runId: session.mastraRunId },
+      500,
+    )
+  }
+
+  console.log(
+    '[sessions] Resume result status:',
+    result.status,
+    'steps:',
+    Object.keys(result.steps || {}),
+  )
+
+  const aiMessage = result.steps?.['ai-turn']?.output?.aiMessage
+  if (aiMessage) {
+    await db.insert(messages).values({
+      sessionId: id,
+      participantId: 'ai',
+      content: aiMessage,
+      type: 'ai',
+    })
+  }
 
   return c.json({
     message: savedMessage,
+    aiMessage: aiMessage ?? null,
     workflowStatus: result.status,
     runId: session.mastraRunId,
   })
@@ -146,8 +178,8 @@ app.post('/:id/skip', async (c) => {
 
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
-  const result = await workflow.resume({
-    runId: session.mastraRunId!,
+  const run = await workflow.createRun({ runId: session.mastraRunId! })
+  const result = await run.resume({
     step: 'user-turn',
     resumeData: { message: '' },
   })
@@ -172,8 +204,8 @@ app.post('/:id/end', async (c) => {
   // Resume with endSession flag
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
-  const result = await workflow.resume({
-    runId: session.mastraRunId!,
+  const run = await workflow.createRun({ runId: session.mastraRunId! })
+  const result = await run.resume({
     step: 'user-turn',
     resumeData: { endSession: true },
   })
