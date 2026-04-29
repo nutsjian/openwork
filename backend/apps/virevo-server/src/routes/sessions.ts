@@ -506,7 +506,7 @@ ${conversationText}`,
       ? response
       : (response.text ?? '{"epics": []}')
 
-  // Extract JSON from response
+  // Extract JSON from response (may be wrapped in markdown code block)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   let extractedEpics: any[] = []
   if (jsonMatch) {
@@ -556,13 +556,36 @@ ${conversationText}`,
     }
   }
 
-  // Return persisted structure with IDs
-  const persisted = await db
+  // Return persisted structure with nested features + userStories
+  const persistedEpics = await db
     .select()
     .from(epics)
     .where(eq(epics.sessionId, id))
 
-  return c.json({ epics: persisted })
+  const result = []
+  for (const epic of persistedEpics) {
+    const epicFeatures = await db
+      .select()
+      .from(features)
+      .where(eq(features.epicId, epic.id))
+
+    const featureList = []
+    for (const feature of epicFeatures) {
+      const featureStories = await db
+        .select()
+        .from(userStories)
+        .where(eq(userStories.featureId, feature.id))
+
+      featureList.push({
+        ...feature,
+        userStories: featureStories,
+      })
+    }
+
+    result.push({ ...epic, features: featureList })
+  }
+
+  return c.json({ epics: result })
 })
 
 export { app as sessionRoutes }

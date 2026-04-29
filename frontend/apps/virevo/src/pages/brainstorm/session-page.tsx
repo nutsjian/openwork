@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { PaperPlaneRight, StopCircle, FileText } from '@phosphor-icons/react'
+import {
+  PaperPlaneRight,
+  StopCircle,
+  FileText,
+  SpinnerGap,
+} from '@phosphor-icons/react'
 import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { ScrollArea } from '@workspace/ui/components/scroll-area'
@@ -17,18 +22,28 @@ interface Message {
 }
 
 interface ExtractedEpic {
+  id?: string
   title: string
   description: string
   features: {
+    id?: string
     title: string
     description: string
     userStories: {
+      id?: string
       title: string
       description: string
       acceptanceCriteria: string[]
     }[]
   }[]
 }
+
+const EXTRACT_STEPS = [
+  '正在读取对话记录...',
+  '正在分析需求结构...',
+  '正在整理 Epic → Feature → User Story...',
+  '正在保存结果...',
+]
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -40,6 +55,9 @@ export function SessionPage() {
   const [streamingText, setStreamingText] = useState('')
   const [epics, setEpics] = useState<ExtractedEpic[]>([])
   const [showPanel, setShowPanel] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [extractStep, setExtractStep] = useState(0)
+  const extractTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -180,14 +198,36 @@ export function SessionPage() {
   }
 
   const handleExtract = async () => {
+    setExtracting(true)
+    setExtractStep(0)
+    setShowPanel(true)
+
+    // Simulate progress steps while waiting for the API
+    extractTimerRef.current = setInterval(() => {
+      setExtractStep((prev) => Math.min(prev + 1, EXTRACT_STEPS.length - 1))
+    }, 8000)
+
     try {
       const result = await api.sessions.extract(sessionId!)
-      setEpics(result.epics)
-      setShowPanel(true)
+      setEpics(result.epics ?? [])
     } catch (err) {
       console.error('Failed to extract requirements:', err)
+      setEpics([])
+    } finally {
+      if (extractTimerRef.current) {
+        clearInterval(extractTimerRef.current)
+        extractTimerRef.current = null
+      }
+      setExtracting(false)
     }
   }
+
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (extractTimerRef.current) clearInterval(extractTimerRef.current)
+    }
+  }, [])
 
   if (!sessionData) {
     return <div className="p-6 text-muted-foreground">加载中...</div>
@@ -265,10 +305,14 @@ export function SessionPage() {
             variant="outline"
             size="sm"
             onClick={handleExtract}
-            disabled={messages.length === 0 || sending}
+            disabled={messages.length === 0 || sending || extracting}
           >
-            <FileText className="size-4" />
-            整理需求
+            {extracting ? (
+              <SpinnerGap className="size-4 animate-spin" />
+            ) : (
+              <FileText className="size-4" />
+            )}
+            {extracting ? '整理中...' : '整理需求'}
           </Button>
           <Input
             ref={inputRef}
@@ -314,7 +358,28 @@ export function SessionPage() {
             </Button>
           </div>
           <ScrollArea className="h-[calc(100%-49px)] p-3">
-            {epics.length === 0 ? (
+            {extracting ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <SpinnerGap className="size-4 animate-spin text-primary" />
+                  <span>正在整理需求...</span>
+                </div>
+                <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  {EXTRACT_STEPS.map((step, i) => (
+                    <li
+                      key={i}
+                      className={
+                        i <= extractStep
+                          ? 'text-foreground'
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {i <= extractStep ? '✓' : '○'} {step}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : epics.length === 0 ? (
               <p className="text-muted-foreground text-xs">
                 暂未提取到需求
               </p>
