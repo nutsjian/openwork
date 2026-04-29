@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Project } from '@/types/project'
+import type { Project } from '@openwork/shared-types'
 
 interface ProjectState {
   projects: Project[]
