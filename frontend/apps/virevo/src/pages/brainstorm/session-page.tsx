@@ -10,6 +10,13 @@ import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { ScrollArea } from '@workspace/ui/components/scroll-area'
 import { Separator } from '@workspace/ui/components/separator'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@workspace/ui/components/sheet'
 import { api } from '@/lib/api'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
@@ -303,7 +310,6 @@ export function SessionPage() {
         <div className="flex items-center gap-2 p-4">
           <Button
             variant="outline"
-            size="sm"
             onClick={handleExtract}
             disabled={messages.length === 0 || sending || extracting}
           >
@@ -334,7 +340,6 @@ export function SessionPage() {
           </Button>
           <Button
             variant="destructive"
-            size="sm"
             onClick={handleEnd}
             disabled={sending}
           >
@@ -344,27 +349,25 @@ export function SessionPage() {
         </div>
       </div>
 
-      {/* Requirements Panel */}
-      {showPanel && (
-        <div className="w-80 border-l">
-          <div className="flex items-center justify-between border-b p-3">
-            <h3 className="text-sm font-semibold">需求结构</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowPanel(false)}
-            >
-              关闭
-            </Button>
-          </div>
-          <ScrollArea className="h-[calc(100%-49px)] p-3">
+      {/* Requirements Sheet (floating panel via Portal) */}
+      <Sheet open={showPanel} onOpenChange={setShowPanel}>
+        <SheetContent side="right" className="w-96">
+          <SheetHeader>
+            <SheetTitle>需求结构</SheetTitle>
+            <SheetDescription>
+              {extracting
+                ? 'AI 正在分析对话并提取需求...'
+                : `共 ${epics.length} 个 Epic`}
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1 px-4 pb-4">
             {extracting ? (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-4 pt-2">
                 <div className="flex items-center gap-2 text-sm">
                   <SpinnerGap className="size-4 animate-spin text-primary" />
                   <span>正在整理需求...</span>
                 </div>
-                <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <ul className="flex flex-col gap-2 text-xs">
                   {EXTRACT_STEPS.map((step, i) => (
                     <li
                       key={i}
@@ -380,36 +383,43 @@ export function SessionPage() {
                 </ul>
               </div>
             ) : epics.length === 0 ? (
-              <p className="text-muted-foreground text-xs">
+              <p className="pt-2 text-muted-foreground text-xs">
                 暂未提取到需求
               </p>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-4 pt-2">
                 {epics.map((epic, i) => (
-                  <div key={i} className="flex flex-col gap-2">
-                    <div className="rounded bg-primary/10 px-2 py-1">
-                      <p className="text-xs font-semibold text-primary">
+                  <div key={epic.id ?? i} className="flex flex-col gap-2">
+                    <div className="rounded bg-primary/10 px-3 py-2">
+                      <p className="text-sm font-semibold text-primary">
                         Epic: {epic.title}
                       </p>
                       <p className="text-muted-foreground text-xs">
                         {epic.description}
                       </p>
                     </div>
-                    {epic.features.map((feature, j) => (
+                    {(epic.features ?? []).map((feature, j) => (
                       <div
-                        key={j}
-                        className="ml-3 rounded bg-muted/50 px-2 py-1"
+                        key={feature.id ?? j}
+                        className="ml-4 rounded bg-muted/50 px-3 py-2"
                       >
-                        <p className="text-xs font-medium">
+                        <p className="text-sm font-medium">
                           Feature: {feature.title}
                         </p>
-                        {feature.userStories.map((story, k) => (
-                          <div key={k} className="ml-3 mt-1 text-muted-foreground">
-                            <p className="text-xs">
+                        <p className="text-muted-foreground text-xs">
+                          {feature.description}
+                        </p>
+                        {(feature.userStories ?? []).map((story, k) => (
+                          <div
+                            key={story.id ?? k}
+                            className="ml-4 mt-2 text-muted-foreground"
+                          >
+                            <p className="text-xs font-medium">
                               Story: {story.title}
                             </p>
+                            <p className="text-xs">{story.description}</p>
                             {story.acceptanceCriteria.length > 0 && (
-                              <ul className="ml-2 list-disc text-xs">
+                              <ul className="ml-3 mt-1 list-disc text-xs">
                                 {story.acceptanceCriteria.map((ac, l) => (
                                   <li key={l}>{ac}</li>
                                 ))}
@@ -424,8 +434,8 @@ export function SessionPage() {
               </div>
             )}
           </ScrollArea>
-        </div>
-      )}
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
