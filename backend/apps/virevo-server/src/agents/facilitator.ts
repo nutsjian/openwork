@@ -1,5 +1,4 @@
 import { Agent } from '@mastra/core/agent'
-import { extractRequirementsTool } from '@/tools/extract-requirements'
 
 const FACILITATOR_INSTRUCTIONS = `你是一位经验丰富的产品经理，专门帮助团队从模糊的想法中梳理出清晰的需求。
 
@@ -27,5 +26,4 @@ export const facilitatorAgent = new Agent({
   name: 'Facilitator',
   instructions: FACILITATOR_INSTRUCTIONS,
   model: 'zhipuai-coding-plan/glm-5-turbo',
-  tools: { extractRequirements: extractRequirementsTool },
 })

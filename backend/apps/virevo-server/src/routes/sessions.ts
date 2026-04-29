@@ -1,18 +1,26 @@
 // @ts-nocheck
 // Mastra v1.28 runtime types have gaps:
-// - WorkflowRunOutput.stream property not in public types (but exists at runtime)
+// - WorkflowRunOutput.fullStream property not in public types (but exists at runtime)
 // - resumeStream options (closeOnSuspend) not fully typed
-// - extractRequirementsTool.execute parameter types mismatch
 // All patterns validated at runtime.
 
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { eq } from 'drizzle-orm'
+import { eq, desc, and, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/db'
-import { sessions, messages } from '@/db/schema'
+import {
+  sessions,
+  messages,
+  meetingMinutes,
+  epics,
+  features,
+  userStories,
+  projects,
+} from '@/db/schema'
 import { getMastra } from '@/workflows/brainstorm'
-import { extractRequirementsTool } from '@/tools/extract-requirements'
+import { facilitatorAgent } from '@/agents/facilitator'
+import { facilitatorAgent } from '@/agents/facilitator'
 
 const app = new Hono()
 
@@ -71,6 +79,39 @@ app.post('/', async (c) => {
   )
 })
 
+// ── GET /sessions (list, optionally filtered by projectId) ──────
+
+app.get('/', async (c) => {
+  const projectId = c.req.query('projectId')
+
+  if (projectId) {
+    const result = await db
+      .select({
+        id: sessions.id,
+        title: sessions.title,
+        status: sessions.status,
+        createdAt: sessions.createdAt,
+        endedAt: sessions.endedAt,
+      })
+      .from(sessions)
+      .where(eq(sessions.projectId, projectId))
+      .orderBy(desc(sessions.createdAt))
+    return c.json(result)
+  }
+
+  const result = await db
+    .select({
+      id: sessions.id,
+      title: sessions.title,
+      status: sessions.status,
+      createdAt: sessions.createdAt,
+      endedAt: sessions.endedAt,
+    })
+    .from(sessions)
+    .orderBy(desc(sessions.createdAt))
+  return c.json(result)
+})
+
 // ── GET /sessions/:id ────────────────────────────────────────────
 
 app.get('/:id', async (c) => {
@@ -84,13 +125,19 @@ app.get('/:id', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
+  // Fetch associated project info for breadcrumb navigation
+  const [project] = await db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(eq(projects.id, session.projectId))
+
   const msgs = await db
     .select()
     .from(messages)
     .where(eq(messages.sessionId, id))
     .orderBy(messages.timestamp)
 
-  return c.json({ ...session, messages: msgs })
+  return c.json({ ...session, project: project ?? null, messages: msgs })
 })
 
 // ── GET /sessions/:id/stream (SSE streaming) ────────────────────
@@ -119,15 +166,20 @@ app.get('/:id/stream', async (c) => {
         closeOnSuspend: true,
       })
 
-      // WorkflowRunOutput exposes a ReadableStream at runtime
-      // even though the public types don't declare it
-      const reader = (output as any).stream.getReader()
+      // WorkflowRunOutput exposes a ReadableStream at .fullStream
+      const reader = (output as any).fullStream.getReader()
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
-        if (value?.type === 'step-result' && value?.id === 'ai-turn') {
-          const aiMessage = value?.payload?.output?.aiMessage
+        const chunkType = value?.type
+        const payload = value?.payload
+
+        if (
+          chunkType === 'workflow-step-result' &&
+          payload?.id === 'ai-turn'
+        ) {
+          const aiMessage = payload?.output?.aiMessage
           if (aiMessage) {
             await db.insert(messages).values({
               sessionId: id,
@@ -139,10 +191,10 @@ app.get('/:id/stream', async (c) => {
               data: JSON.stringify({ aiMessage }),
             })
           }
-        } else if (value?.type === 'step-suspended') {
+        } else if (chunkType === 'workflow-step-suspended') {
           await stream.writeSSE({
             event: 'suspended',
-            data: JSON.stringify({ step: value.id }),
+            data: JSON.stringify({ step: payload?.id }),
           })
         }
       }
@@ -156,7 +208,7 @@ app.get('/:id/stream', async (c) => {
   })
 })
 
-// ── POST /sessions/:id/messages (send message + resume) ────────
+// ── POST /sessions/:id/messages (send message + stream AI response) ──
 
 app.post('/:id/messages', async (c) => {
   const id = c.req.param('id')
@@ -176,6 +228,7 @@ app.post('/:id/messages', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
+  // Save user message to DB
   const [savedMessage] = await db
     .insert(messages)
     .values({
@@ -189,11 +242,101 @@ app.post('/:id/messages', async (c) => {
   const m = getMastra()
   const workflow = m.getWorkflow('brainstorm-session')
   const run = await workflow.createRun({ runId: session.mastraRunId! })
-  let result
+
   try {
-    result = await run.resume({
+    const output = run.resumeStream({
       step: 'user-turn',
       resumeData: { message: parsed.data.content },
+    })
+
+    // resumeStream() returns WorkflowRunOutput with .fullStream (ReadableStream)
+    // Chunk types: workflow-start, workflow-step-result, workflow-step-suspended, workflow-finish, etc.
+    return streamSSE(c, async (stream) => {
+      // Send user message confirmation immediately
+      await stream.writeSSE({
+        event: 'user-message',
+        data: JSON.stringify(savedMessage),
+      })
+
+      try {
+        const ws = (output as any).fullStream as ReadableStream
+        const reader = ws.getReader()
+        let fullAiMessage = ''
+        let stepResultSaved = false
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunkType = value?.type
+          const payload = value?.payload
+
+          // Debug log (remove in production)
+          if (chunkType === 'workflow-step-result') {
+            console.log(
+              '[sessions] step-result:',
+              payload?.id,
+              payload?.status,
+              JSON.stringify(payload?.output ?? {}).substring(0, 200),
+            )
+          }
+
+          // Forward workflow-step-result events to client
+          if (chunkType === 'workflow-step-result' && payload?.id) {
+            await stream.writeSSE({
+              event: 'step-result',
+              data: JSON.stringify({
+                type: 'step-result',
+                id: payload.id,
+                status: payload.status,
+                output: payload.output,
+              }),
+            })
+
+            // Extract AI message from ai-turn step result
+            if (
+              payload.id === 'ai-turn' &&
+              payload.output?.aiMessage
+            ) {
+              fullAiMessage = payload.output.aiMessage
+            }
+          } else if (chunkType === 'workflow-step-suspended') {
+            await stream.writeSSE({
+              event: 'suspended',
+              data: JSON.stringify({
+                type: 'suspended',
+                step: payload?.id,
+              }),
+            })
+          } else if (chunkType === 'workflow-finish') {
+            await stream.writeSSE({
+              event: 'finish',
+              data: JSON.stringify(payload),
+            })
+          }
+        }
+
+        // Persist the complete AI message to DB
+        if (fullAiMessage && !stepResultSaved) {
+          await db.insert(messages).values({
+            sessionId: id,
+            participantId: 'ai',
+            content: fullAiMessage,
+            type: 'ai',
+          })
+          stepResultSaved = true
+          await stream.writeSSE({
+            event: 'done',
+            data: JSON.stringify({ saved: true }),
+          })
+        }
+      } catch (err: any) {
+        console.error('[sessions] Stream error:', err.message)
+        await stream.writeSSE({
+          event: 'error',
+          data: JSON.stringify({ error: err.message }),
+        })
+      }
     })
   } catch (err: any) {
     console.error('[sessions] Workflow resume error:', err.message)
@@ -203,32 +346,6 @@ app.post('/:id/messages', async (c) => {
       500,
     )
   }
-
-  console.log(
-    '[sessions] Resume result status:',
-    result.status,
-    'steps:',
-    Object.keys(result.steps || {}),
-  )
-
-  const aiTurnStep = result.steps?.['ai-turn'] as any
-  const aiMessage = aiTurnStep?.output?.aiMessage ?? null
-
-  if (aiMessage) {
-    await db.insert(messages).values({
-      sessionId: id,
-      participantId: 'ai',
-      content: aiMessage,
-      type: 'ai',
-    })
-  }
-
-  return c.json({
-    message: savedMessage,
-    aiMessage: aiMessage ?? null,
-    workflowStatus: result.status,
-    runId: session.mastraRunId,
-  })
 })
 
 // ── POST /sessions/:id/skip ─────────────────────────────────────
@@ -270,20 +387,56 @@ app.post('/:id/end', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  const m = getMastra()
-  const workflow = m.getWorkflow('brainstorm-session')
-  const run = await workflow.createRun({ runId: session.mastraRunId! })
-  const result = await run.resume({
-    step: 'user-turn',
-    resumeData: { endSession: true },
-  })
+  // Fetch all messages for this session
+  const msgs = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.sessionId, id))
+    .orderBy(messages.timestamp)
 
+  // Generate meeting minutes directly via the agent
+  const historyText = msgs
+    .map((m) =>
+      `[${m.type === 'user' ? '用户' : 'AI'}]: ${m.content}`,
+    )
+    .join('\n')
+
+  const response = await facilitatorAgent.generate(
+    `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
+- 会议日期
+- 参与者
+- 讨论摘要
+- 提出的需求（Epic/Feature/User Story）
+- 待解决问题
+- 行动项
+
+对话记录：
+${historyText}`,
+  )
+
+  const minutesText =
+    typeof response === 'string'
+      ? response
+      : response.text ?? '（生成失败）'
+
+  // Persist meeting minutes to DB
+  const [minutes] = await db
+    .insert(meetingMinutes)
+    .values({
+      sessionId: id,
+      projectId: session.projectId,
+      sessionDate: session.createdAt,
+      summary: minutesText,
+    })
+    .returning()
+
+  // Mark session as completed
   await db
     .update(sessions)
     .set({ status: 'completed', endedAt: new Date() })
     .where(eq(sessions.id, id))
 
-  return c.json({ workflowStatus: result.status })
+  return c.json({ minutes })
 })
 
 // ── POST /sessions/:id/extract ─────────────────────────────────
@@ -301,14 +454,115 @@ app.post('/:id/extract', async (c) => {
     return c.json({ epics: [] })
   }
 
-  const result = await extractRequirementsTool.execute({
-    conversationHistory: msgs.map((m) => ({
-      role: m.type === 'user' ? 'user' : 'assistant',
-      content: m.content,
-    })),
-  })
+  // Get session for projectId
+  const [session] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
 
-  return c.json(result)
+  // Build conversation text for the AI
+  const conversationText = msgs
+    .map((m) => `[${m.type === 'user' ? 'user' : 'assistant'}]: ${m.content}`)
+    .join('\n')
+
+  const response = await facilitatorAgent.generate(
+    `请分析以下对话记录，提取其中涉及的所有需求，并按照 Epic → Feature → User Story 的层级结构进行整理。
+
+要求：
+1. 每个需求必须来自对话中明确提到的内容
+2. 不要臆造对话中没有提到的需求
+3. User Story 需要包含验收标准
+4. 以 JSON 格式返回，结构为：
+{
+  "epics": [
+    {
+      "title": "...",
+      "description": "...",
+      "features": [
+        {
+          "title": "...",
+          "description": "...",
+          "userStories": [
+            {
+              "title": "...",
+              "description": "...",
+              "acceptanceCriteria": ["..."]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+如果对话中没有足够的信息来提取任何需求，返回 { "epics": [] }。
+
+对话记录：
+${conversationText}`,
+  )
+
+  const text =
+    typeof response === 'string'
+      ? response
+      : (response.text ?? '{"epics": []}')
+
+  // Extract JSON from response
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  let extractedEpics: any[] = []
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0])
+      extractedEpics = parsed.epics ?? []
+    } catch {
+      extractedEpics = []
+    }
+  }
+
+  // Overwrite mode: delete existing epics for this session (cascades to features + user_stories)
+  await db
+    .delete(epics)
+    .where(eq(epics.sessionId, id))
+
+  // Persist extracted requirements
+  for (const epic of extractedEpics) {
+    const [insertedEpic] = await db
+      .insert(epics)
+      .values({
+        projectId: session?.projectId,
+        sessionId: id,
+        title: epic.title,
+        description: epic.description ?? '',
+      })
+      .returning()
+
+    for (const feature of epic.features ?? []) {
+      const [insertedFeature] = await db
+        .insert(features)
+        .values({
+          epicId: insertedEpic.id,
+          title: feature.title,
+          description: feature.description ?? '',
+        })
+        .returning()
+
+      for (const story of feature.userStories ?? []) {
+        await db.insert(userStories).values({
+          featureId: insertedFeature.id,
+          title: story.title,
+          description: story.description ?? '',
+          acceptanceCriteria: story.acceptanceCriteria ?? [],
+        })
+      }
+    }
+  }
+
+  // Return persisted structure with IDs
+  const persisted = await db
+    .select()
+    .from(epics)
+    .where(eq(epics.sessionId, id))
+
+  return c.json({ epics: persisted })
 })
 
 export { app as sessionRoutes }

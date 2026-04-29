@@ -5,8 +5,6 @@ import { VirevoLayout } from '@/layouts/virevo-layout'
 import { ProjectListPage as BrainstormProjectListPage } from '@/pages/brainstorm/project-list-page'
 import { ProjectDetailPage } from '@/pages/brainstorm/project-detail-page'
 import { SessionPage } from '@/pages/brainstorm/session-page'
-import { MinutesPage } from '@/pages/brainstorm/minutes-page'
-import { ReviewsPage } from '@/pages/brainstorm/reviews-page'
 import { BacklogPage } from '@/pages/brainstorm/backlog-page'
 
 // Scrum pages
@@ -32,22 +30,12 @@ export const virevoRoutes: RouteObject[] = [
         children: [
           { index: true, element: <Navigate to="projects" replace /> },
           { path: 'projects', element: <BrainstormProjectListPage /> },
-          {
-            path: 'projects/:id',
-            element: <ProjectDetailPage />,
-            children: [
-              { index: true, element: <Navigate to="sessions" replace /> },
-              {
-                path: 'sessions',
-                element: <SessionPage />,
-              },
-              { path: 'minutes', element: <MinutesPage /> },
-              { path: 'reviews', element: <ReviewsPage /> },
-            ],
-          },
+          { path: 'projects/:id', element: <ProjectDetailPage /> },
           { path: 'backlog', element: <BacklogPage /> },
         ],
       },
+      // Sessions (top-level route)
+      { path: 'sessions/:sessionId', element: <SessionPage /> },
       // Scrum
       {
         path: 'scrum',

@@ -1,42 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface UseSSEOptions {
+  /** Called when a default (unnamed) SSE event is received */
   onMessage?: (data: string) => void
+  /** Called when the SSE connection opens */
+  onOpen?: () => void
+  /** Called when an SSE error occurs */
   onError?: (error: Event) => void
-  onComplete?: () => void
+  /** Called when the SSE connection closes */
+  onClose?: () => void
 }
 
-export function useSSE(url: string, options?: UseSSEOptions) {
+export function useSSE(url: string | null, options?: UseSSEOptions) {
   const [connected, setConnected] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
-
-  const connect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-    }
-
-    const es = new EventSource(url)
-    eventSourceRef.current = es
-
-    es.onopen = () => {
-      setConnected(true)
-    }
-
-    es.onmessage = (event) => {
-      options?.onMessage?.(event.data)
-    }
-
-    es.onerror = (event) => {
-      setConnected(false)
-      options?.onError?.(event)
-    }
-
-    return () => {
-      es.close()
-      eventSourceRef.current = null
-      setConnected(false)
-    }
-  }, [url, options])
 
   const disconnect = useCallback(() => {
     if (eventSourceRef.current) {
@@ -47,9 +24,32 @@ export function useSSE(url: string, options?: UseSSEOptions) {
   }, [])
 
   useEffect(() => {
-    const cleanup = connect()
-    return cleanup
-  }, [connect])
+    if (!url) return
 
-  return { connected, connect, disconnect }
+    const es = new EventSource(url)
+    eventSourceRef.current = es
+
+    es.onopen = () => {
+      setConnected(true)
+      options?.onOpen?.()
+    }
+
+    es.onmessage = (event) => {
+      options?.onMessage?.(event.data)
+    }
+
+    es.onerror = () => {
+      setConnected(false)
+      options?.onError?.(new Event('error'))
+    }
+
+    return () => {
+      es.close()
+      eventSourceRef.current = null
+      setConnected(false)
+      options?.onClose?.()
+    }
+  }, [url])
+
+  return { connected, disconnect }
 }

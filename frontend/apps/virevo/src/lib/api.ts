@@ -39,6 +39,10 @@ export const api = {
   },
 
   sessions: {
+    listByProject: (projectId: string) =>
+      request<any[]>(
+        `/sessions?projectId=${projectId}`,
+      ),
     create: (data: { projectId: string; title?: string }) =>
       request<any>('/sessions', {
         method: 'POST',
@@ -61,8 +65,8 @@ export const api = {
   },
 
   minutes: {
-    list: (projectId: string) =>
-      request<any[]>(`/minutes?projectId=${projectId}`),
+    listByProject: (projectId: string) =>
+      request<any[]>(`/projects/${projectId}/minutes`),
     get: (id: string) => request<any>(`/minutes/${id}`),
   },
 }

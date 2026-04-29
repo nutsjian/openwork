@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Mastra v1.28 type system has known limitations:
 // - Workflow .then() chain type inference is overly strict about input/output schema matching
-// - WorkflowRunOutput.stream property not exposed in public types
+// - WorkflowRunOutput.fullStream property not exposed in public types
 // - createWorkflow requires outputSchema even for void-output workflows
 // All patterns validated at runtime against Mastra v1.28 docs.
 
