@@ -5,7 +5,12 @@ import { VirevoLayout } from '@/layouts/virevo-layout'
 import { ProjectListPage as BrainstormProjectListPage } from '@/pages/brainstorm/project-list-page'
 import { ProjectDetailPage } from '@/pages/brainstorm/project-detail-page'
 import { SessionPage } from '@/pages/brainstorm/session-page'
+import { LiveSessionPage } from '@/pages/brainstorm/live-session-page'
+import { MinuteDetailPage } from '@/pages/brainstorm/minute-detail-page'
 import { BacklogPage } from '@/pages/brainstorm/backlog-page'
+
+// Join page
+import { JoinPage } from '@/pages/join-page'
 
 // Scrum pages
 import { ScrumProjectListPage } from '@/pages/scrum/project-list-page'
@@ -31,11 +36,16 @@ export const virevoRoutes: RouteObject[] = [
           { index: true, element: <Navigate to="projects" replace /> },
           { path: 'projects', element: <BrainstormProjectListPage /> },
           { path: 'projects/:id', element: <ProjectDetailPage /> },
+          { path: 'minutes/:id', element: <MinuteDetailPage /> },
           { path: 'backlog', element: <BacklogPage /> },
         ],
       },
       // Sessions (top-level route)
       { path: 'sessions/:sessionId', element: <SessionPage /> },
+      // Live session (multi-person real-time)
+      { path: 'sessions/:sessionId/live', element: <LiveSessionPage /> },
+      // Join via invite link
+      { path: 'join/:token', element: <JoinPage /> },
       // Scrum
       {
         path: 'scrum',

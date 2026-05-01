@@ -110,6 +110,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:13179',
         changeOrigin: true,
+        ws: true,
       },
     },
   }

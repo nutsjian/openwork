@@ -2,8 +2,8 @@ import { Outlet } from 'react-router-dom'
 
 export function VirevoLayout() {
   return (
-    <main className="flex flex-1 flex-col overflow-auto">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Outlet />
-    </main>
+    </div>
   )
 }

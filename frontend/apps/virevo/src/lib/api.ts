@@ -43,12 +43,29 @@ export const api = {
       request<any[]>(
         `/sessions?projectId=${projectId}`,
       ),
-    create: (data: { projectId: string; title?: string }) =>
+    create: (data: {
+      projectId: string
+      title?: string
+      creatorMemberId?: string
+    }) =>
       request<any>('/sessions', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
     get: (id: string) => request<any>(`/sessions/${id}`),
+    join: (
+      sessionId: string,
+      data: { projectMemberId: string; nickname: string },
+    ) =>
+      request<{ participantId: string }>(`/sessions/${sessionId}/join`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    markRead: (sessionId: string, participantId: string) =>
+      request<{ success: boolean }>(`/sessions/${sessionId}/read`, {
+        method: 'POST',
+        body: JSON.stringify({ participantId }),
+      }),
     sendMessage: (id: string, content: string) =>
       request<any>(`/sessions/${id}/messages`, {
         method: 'POST',
@@ -69,4 +86,70 @@ export const api = {
       request<any[]>(`/projects/${projectId}/minutes`),
     get: (id: string) => request<any>(`/minutes/${id}`),
   },
+
+  epics: {
+    listByProject: (projectId: string) =>
+      request<any[]>(`/projects/${projectId}/epics`),
+    score: (epicId: string, data: { projectMemberId: string; score: number; comment?: string }) =>
+      request<{ averageScore: number; reviewCount: number }>(`/epics/${epicId}/score`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    reviews: (epicId: string) =>
+      request<any[]>(`/epics/${epicId}/reviews`),
+    admit: (epicId: string) =>
+      request<{ success: boolean }>(`/epics/${epicId}/admit`, { method: 'POST' }),
+    reject: (epicId: string) =>
+      request<{ success: boolean }>(`/epics/${epicId}/reject`, { method: 'POST' }),
+    backlog: (projectId: string) =>
+      request<any[]>(`/projects/${projectId}/backlog`),
+  },
+
+  members: {
+    list: (projectId: string) =>
+      request<any[]>(`/projects/${projectId}/members`),
+    add: (projectId: string, data: { name: string; email?: string }) =>
+      request<any>(`/projects/${projectId}/members`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    remove: (projectId: string, memberId: string) =>
+      request<void>(`/projects/${projectId}/members/${memberId}`, {
+        method: 'DELETE',
+      }),
+    createInvite: (projectId: string) =>
+      request<{ token: string }>(`/projects/${projectId}/invite`, {
+        method: 'POST',
+      }),
+    resolveInvite: (token: string) =>
+      request<{ token: string; member: any; project: any }>(
+        `/join/${token}`,
+      ),
+  },
+}
+
+// ── WebSocket ────────────────────────────────────────────────────
+
+export function createSessionWebSocket(params: {
+  sessionId: string
+  nickname: string
+  role: 'host' | 'member'
+}) {
+  const wsUrl = `${API_BASE.replace(/^http/, 'ws')}/api/v1/ws?sessionId=${params.sessionId}&nickname=${encodeURIComponent(params.nickname)}&role=${params.role}`
+  return new WebSocket(wsUrl)
+}
+
+// ── Avatar color ─────────────────────────────────────────────────
+
+const AVATAR_COLORS = [
+  '#4F46E5', '#7C3AED', '#DB2777', '#DC2626', '#EA580C',
+  '#CA8A04', '#16A34A', '#0891B2', '#2563EB', '#9333EA',
+]
+
+export function getAvatarColor(nickname: string): string {
+  let hash = 0
+  for (let i = 0; i < nickname.length; i++) {
+    hash = nickname.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
 }

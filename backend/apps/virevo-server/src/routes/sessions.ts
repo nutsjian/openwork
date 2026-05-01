@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { eq, desc } from 'drizzle-orm'
+import { eq, desc, and, sql, count } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/db'
 import {
@@ -11,6 +11,7 @@ import {
   features,
   userStories,
   projects,
+  sessionParticipants,
 } from '@/db/schema'
 import { facilitatorAgent } from '@/agents/facilitator'
 
@@ -24,11 +25,14 @@ app.onError((err, c) => {
 const createSessionSchema = z.object({
   projectId: z.string().uuid(),
   title: z.string().default('需求讨论会'),
+  creatorMemberId: z.string().uuid().optional(),
 })
 
 const messageSchema = z.object({
   content: z.string().min(1),
 })
+
+// ── POST / — Create session (auto-join creator) ────────────────────
 
 app.post('/', async (c) => {
   const body = await c.req.json()
@@ -43,29 +47,43 @@ app.post('/', async (c) => {
     .values({
       projectId: parsed.data.projectId,
       title: parsed.data.title,
+      creatorId: parsed.data.creatorMemberId || null,
     })
     .returning()
 
-  return c.json(session, 201)
+  // Auto-create participant for creator if provided
+  let participantId: string | null = null
+  if (parsed.data.creatorMemberId) {
+    const [participant] = await db
+      .insert(sessionParticipants)
+      .values({
+        sessionId: session.id,
+        projectMemberId: parsed.data.creatorMemberId,
+        nickname: '创建者',
+        role: 'host',
+        color: getColor('创建者'),
+      })
+      .returning()
+    participantId = participant.id
+
+    // System message: session created
+    await db.insert(messages).values({
+      sessionId: session.id,
+      participantId: participant.id,
+      nickname: '系统',
+      content: `讨论会「${session.title}」已创建`,
+      type: 'user',
+      messageType: 'system',
+    })
+  }
+
+  return c.json({ ...session, participantId }, 201)
 })
+
+// ── GET / — List sessions (with last message preview) ──────────────
 
 app.get('/', async (c) => {
   const projectId = c.req.query('projectId')
-
-  if (projectId) {
-    const result = await db
-      .select({
-        id: sessions.id,
-        title: sessions.title,
-        status: sessions.status,
-        createdAt: sessions.createdAt,
-        endedAt: sessions.endedAt,
-      })
-      .from(sessions)
-      .where(eq(sessions.projectId, projectId))
-      .orderBy(desc(sessions.createdAt))
-    return c.json(result)
-  }
 
   const result = await db
     .select({
@@ -74,11 +92,17 @@ app.get('/', async (c) => {
       status: sessions.status,
       createdAt: sessions.createdAt,
       endedAt: sessions.endedAt,
+      lastMessageAt: sessions.lastMessageAt,
+      lastMessagePreview: sessions.lastMessagePreview,
     })
     .from(sessions)
-    .orderBy(desc(sessions.createdAt))
+    .where(projectId ? eq(sessions.projectId, projectId) : undefined)
+    .orderBy(desc(sessions.lastMessageAt))
+
   return c.json(result)
 })
+
+// ── GET /:id — Get session detail ──────────────────────────────────
 
 app.get('/:id', async (c) => {
   const id = c.req.param('id')
@@ -102,8 +126,111 @@ app.get('/:id', async (c) => {
     .where(eq(messages.sessionId, id))
     .orderBy(messages.timestamp)
 
-  return c.json({ ...session, project: project ?? null, messages: msgs })
+  const participants = await db
+    .select({
+      id: sessionParticipants.id,
+      projectMemberId: sessionParticipants.projectMemberId,
+      nickname: sessionParticipants.nickname,
+      role: sessionParticipants.role,
+      status: sessionParticipants.status,
+      color: sessionParticipants.color,
+      lastReadAt: sessionParticipants.lastReadAt,
+    })
+    .from(sessionParticipants)
+    .where(eq(sessionParticipants.sessionId, id))
+
+  return c.json({
+    ...session,
+    project: project ?? null,
+    messages: msgs,
+    participants,
+  })
 })
+
+// ── POST /:id/join — Join a session as a member ───────────────────
+
+const joinSchema = z.object({
+  projectMemberId: z.string().uuid(),
+  nickname: z.string().min(1).max(50),
+})
+
+app.post('/:id/join', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const parsed = joinSchema.safeParse(body)
+
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400)
+  }
+
+  const [session] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, id))
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404)
+  }
+
+  // Check if already a member
+  const existing = await db
+    .select()
+    .from(sessionParticipants)
+    .where(
+      and(
+        eq(sessionParticipants.sessionId, id),
+        eq(sessionParticipants.projectMemberId, parsed.data.projectMemberId),
+      ),
+    )
+
+  if (existing.length > 0) {
+    return c.json({ participantId: existing[0].id })
+  }
+
+  const [participant] = await db
+    .insert(sessionParticipants)
+    .values({
+      sessionId: id,
+      projectMemberId: parsed.data.projectMemberId,
+      nickname: parsed.data.nickname,
+      role: 'member',
+      color: getColor(parsed.data.nickname),
+    })
+    .returning()
+
+  // System message: member joined
+  await db.insert(messages).values({
+    sessionId: id,
+    participantId: participant.id,
+    nickname: '系统',
+    content: `${parsed.data.nickname} 加入了讨论`,
+    type: 'user',
+    messageType: 'system',
+  })
+
+  return c.json({ participantId: participant.id }, 201)
+})
+
+// ── POST /:id/read — Mark messages as read ─────────────────────────
+
+app.post('/:id/read', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const { participantId } = body
+
+  if (!participantId) {
+    return c.json({ error: 'participantId required' }, 400)
+  }
+
+  await db
+    .update(sessionParticipants)
+    .set({ lastReadAt: new Date() })
+    .where(eq(sessionParticipants.id, participantId))
+
+  return c.json({ success: true })
+})
+
+// ── POST /:id/messages — Send message via REST (1:1 compatibility) ──
 
 app.post('/:id/messages', async (c) => {
   const id = c.req.param('id')
@@ -132,6 +259,15 @@ app.post('/:id/messages', async (c) => {
       type: 'user',
     })
     .returning()
+
+  // Update session last message
+  await db
+    .update(sessions)
+    .set({
+      lastMessageAt: savedMessage.timestamp,
+      lastMessagePreview: parsed.data.content.slice(0, 100),
+    })
+    .where(eq(sessions.id, id))
 
   const existingMessages = await db
     .select()
@@ -168,6 +304,7 @@ app.post('/:id/messages', async (c) => {
           await db.insert(messages).values({
             sessionId: id,
             participantId: 'ai',
+            nickname: 'AI 助手',
             content: fullAiMessage,
             type: 'ai',
           })
@@ -191,6 +328,8 @@ app.post('/:id/messages', async (c) => {
   }
 })
 
+// ── POST /:id/end ─────────────────────────────────────────────────
+
 app.post('/:id/end', async (c) => {
   const id = c.req.param('id')
 
@@ -203,18 +342,29 @@ app.post('/:id/end', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  const msgs = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.sessionId, id))
-    .orderBy(messages.timestamp)
+  if (session.status !== 'active') {
+    return c.json({ error: 'Session is not active' }, 400)
+  }
 
-  const historyText = msgs
-    .map((m) => `[${m.type === 'user' ? '用户' : 'AI'}]: ${m.content}`)
-    .join('\n')
+  await db
+    .update(sessions)
+    .set({ status: 'completing' })
+    .where(eq(sessions.id, id))
 
-  const minutesText = await facilitatorAgent.generate(
-    `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
+  ;(async () => {
+    try {
+      const msgs = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.sessionId, id))
+        .orderBy(messages.timestamp)
+
+      const historyText = msgs
+        .map((m) => `[${m.type === 'user' ? '用户' : 'AI'}]: ${m.content}`)
+        .join('\n')
+
+      const minutesText = await facilitatorAgent.generate(
+        `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
 - 会议日期
 - 参与者
 - 讨论摘要
@@ -224,25 +374,28 @@ app.post('/:id/end', async (c) => {
 
 对话记录：
 ${historyText}`,
-  )
+      )
 
-  const [minutes] = await db
-    .insert(meetingMinutes)
-    .values({
-      sessionId: id,
-      projectId: session.projectId,
-      sessionDate: session.createdAt,
-      summary: minutesText,
-    })
-    .returning()
+      await db.insert(meetingMinutes).values({
+        sessionId: id,
+        projectId: session.projectId,
+        sessionDate: session.createdAt,
+        summary: minutesText,
+      })
+    } catch (err) {
+      console.error('[sessions] Background minutes generation failed:', err)
+    } finally {
+      await db
+        .update(sessions)
+        .set({ status: 'completed', endedAt: new Date() })
+        .where(eq(sessions.id, id))
+    }
+  })()
 
-  await db
-    .update(sessions)
-    .set({ status: 'completed', endedAt: new Date() })
-    .where(eq(sessions.id, id))
-
-  return c.json({ minutes })
+  return c.json({ status: 'completing' })
 })
+
+// ── POST /:id/extract ──────────────────────────────────────────────
 
 app.post('/:id/extract', async (c) => {
   const id = c.req.param('id')
@@ -377,5 +530,28 @@ ${conversationText}`,
 
   return c.json({ epics: result })
 })
+
+// ── Utility ──────────────────────────────────────────────────────
+
+const COLORS = [
+  '#4F46E5',
+  '#059669',
+  '#D97706',
+  '#DC2626',
+  '#7C3AED',
+  '#0891B2',
+  '#DB2777',
+  '#2563EB',
+  '#65A30D',
+  '#EA580C',
+]
+
+function getColor(nickname: string): string {
+  let hash = 0
+  for (let i = 0; i < nickname.length; i++) {
+    hash = nickname.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return COLORS[Math.abs(hash) % COLORS.length]
+}
 
 export { app as sessionRoutes }

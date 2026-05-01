@@ -5,11 +5,26 @@ import {
   StopCircle,
   FileText,
   SpinnerGap,
+  UserCircleIcon,
+  RobotIcon,
+  WarningCircleIcon,
 } from '@phosphor-icons/react'
 import { Button } from '@workspace/ui/components/button'
 import { Input } from '@workspace/ui/components/input'
 import { ScrollArea } from '@workspace/ui/components/scroll-area'
 import { Separator } from '@workspace/ui/components/separator'
+import { Badge } from '@workspace/ui/components/badge'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@workspace/ui/components/alert-dialog'
 import {
   Sheet,
   SheetContent,
@@ -18,6 +33,7 @@ import {
   SheetDescription,
 } from '@workspace/ui/components/sheet'
 import { api } from '@/lib/api'
+import { MarkdownContent } from '@/components/markdown-content'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
@@ -26,6 +42,7 @@ interface Message {
   content: string
   type: 'user' | 'ai'
   timestamp: string
+  participantId: string
 }
 
 interface ExtractedEpic {
@@ -52,6 +69,12 @@ const EXTRACT_STEPS = [
   '正在保存结果...',
 ]
 
+const SESSION_STATUS_LABEL: Record<string, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+  active: { label: '进行中', variant: 'default' },
+  completing: { label: '正在生成纪要...', variant: 'secondary' },
+  completed: { label: '已结束', variant: 'outline' },
+}
+
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
@@ -64,47 +87,67 @@ export function SessionPage() {
   const [showPanel, setShowPanel] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [extractStep, setExtractStep] = useState(0)
+  const [ending, setEnding] = useState(false)
+  const [showEndDialog, setShowEndDialog] = useState(false)
   const extractTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Fetch session detail (includes project info for breadcrumb + messages)
+  const isReadOnly =
+    !sessionData ||
+    sessionData.status === 'completing' ||
+    sessionData.status === 'completed'
+
+  // Fetch session detail
   useEffect(() => {
     if (!sessionId) return
     api.sessions
       .get(sessionId)
       .then((data) => {
         setSessionData(data)
-        setMessages(data.messages || [])
+        setMessages(
+          (data.messages || []).map((m: any) => ({
+            id: m.id,
+            content: m.content,
+            type: m.type,
+            timestamp: m.timestamp,
+            participantId: m.participantId ?? m.type,
+          })),
+        )
       })
       .catch(() => navigate('/virevo/brainstorm/projects'))
   }, [sessionId, navigate])
 
+  // Auto-scroll to bottom on new content
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (!scrollRef.current) return
+    const el = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]')
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
   }, [messages, streamingText])
 
   const projectName = sessionData?.project?.name ?? '项目'
   const sessionTitle = sessionData?.title ?? '讨论会'
 
   const handleSend = async () => {
-    if (!input.trim() || sending || !sessionId) return
+    if (!input.trim() || sending || !sessionId || isReadOnly) return
     const content = input.trim()
     setInput('')
     setSending(true)
     setStreamingText('')
 
-    // Add user message to UI immediately
     const userMsg: Message = {
       id: crypto.randomUUID(),
       content,
       type: 'user',
       timestamp: new Date().toISOString(),
+      participantId: 'user',
     }
     setMessages((prev) => [...prev, userMsg])
     inputRef.current?.focus()
 
-    // POST to server and consume the SSE response stream
     const abort = new AbortController()
 
     try {
@@ -119,8 +162,7 @@ export function SessionPage() {
       )
 
       if (!res.ok) {
-        const errBody = await res.text()
-        console.error('[session] POST error:', res.status, errBody)
+        console.error('[session] POST error:', res.status)
         setSending(false)
         return
       }
@@ -133,6 +175,7 @@ export function SessionPage() {
 
       const decoder = new TextDecoder()
       let buffer = ''
+      let fullText = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -140,48 +183,60 @@ export function SessionPage() {
 
         buffer += decoder.decode(value, { stream: true })
 
-        // Parse SSE lines from the buffer
         const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // keep incomplete line in buffer
+        buffer = lines.pop() || ''
 
         for (const line of lines) {
-          if (line.startsWith('event:') || line.startsWith(':')) {
-            // skip event type lines and SSE comments
-            continue
-          }
-          if (line.startsWith('data:')) {
-            const dataStr = line.slice(5).trim()
-            if (!dataStr) continue
+          if (line.startsWith('event:') || line.startsWith(':')) continue
+          if (!line.startsWith('data:')) continue
 
-            try {
-              const event = JSON.parse(dataStr)
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
 
-              if (event.type === 'step-result' && event.id === 'ai-turn') {
-                // ai-turn completed — use the final output
-                setStreamingText('')
-                const aiMessage = event.output?.aiMessage
-                if (aiMessage) {
-                  setMessages((prev) => [
-                    ...prev,
-                    {
-                      id: crypto.randomUUID(),
-                      content: aiMessage,
-                      type: 'ai',
-                      timestamp: new Date().toISOString(),
-                    },
-                  ])
-                }
-              } else if (event.type === 'done') {
-                setStreamingText('')
-              } else if (event.type === 'error') {
-                console.error('[session] Stream error:', event.error)
-                setStreamingText('')
+          try {
+            const event = JSON.parse(dataStr)
+
+            if (event.text) {
+              // Streaming chunk — accumulate and display in real-time
+              fullText += event.text
+              setStreamingText(fullText)
+            } else if (event.saved) {
+              // AI message fully saved to DB — finalize
+              setStreamingText('')
+              if (fullText) {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    content: fullText,
+                    type: 'ai',
+                    timestamp: new Date().toISOString(),
+                    participantId: 'ai',
+                  },
+                ])
               }
-            } catch {
-              // non-JSON data, ignore
             }
+          } catch {
+            // non-JSON data, ignore
           }
         }
+      }
+
+      // If stream ended without a 'saved' event, still commit the text
+      if (fullText && !streamingText) {
+        // already committed via 'saved' event
+      } else if (fullText) {
+        setStreamingText('')
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            content: fullText,
+            type: 'ai',
+            timestamp: new Date().toISOString(),
+            participantId: 'ai',
+          },
+        ])
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
@@ -193,14 +248,14 @@ export function SessionPage() {
   }
 
   const handleEnd = async () => {
-    if (!confirm('确定要结束本次讨论会吗？')) return
-    setSending(true)
+    setShowEndDialog(false)
+    setEnding(true)
     try {
       await api.sessions.end(sessionId!)
+      navigate(`/virevo/brainstorm/projects/${sessionData.projectId}`)
     } catch (err) {
       console.error('Failed to end session:', err)
-    } finally {
-      setSending(false)
+      setEnding(false)
     }
   }
 
@@ -209,7 +264,6 @@ export function SessionPage() {
     setExtractStep(0)
     setShowPanel(true)
 
-    // Simulate progress steps while waiting for the API
     extractTimerRef.current = setInterval(() => {
       setExtractStep((prev) => Math.min(prev + 1, EXTRACT_STEPS.length - 1))
     }, 8000)
@@ -229,7 +283,6 @@ export function SessionPage() {
     }
   }
 
-  // Clean up timer on unmount
   useEffect(() => {
     return () => {
       if (extractTimerRef.current) clearInterval(extractTimerRef.current)
@@ -237,35 +290,51 @@ export function SessionPage() {
   }, [])
 
   if (!sessionData) {
-    return <div className="p-6 text-muted-foreground">加载中...</div>
+    return (
+      <div className="flex h-[calc(100vh-var(--header-height)-1px)] items-center justify-center">
+        <SpinnerGap className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    )
   }
+
+  const statusInfo = SESSION_STATUS_LABEL[sessionData.status]
 
   return (
     <div className="flex h-[calc(100vh-var(--header-height)-1px)]">
       {/* Chat Area */}
       <div className="flex flex-1 flex-col">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 border-b px-4 py-2 text-sm">
-          <Link
-            to="/virevo/brainstorm/projects"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            项目列表
-          </Link>
-          <span className="text-muted-foreground">/</span>
-          <Link
-            to={`/virevo/brainstorm/projects/${sessionData.projectId}`}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {projectName}
-          </Link>
-          <span className="text-muted-foreground">/</span>
-          <span className="font-medium">{sessionTitle}</span>
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <Link
+              to="/virevo/brainstorm/projects"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              项目列表
+            </Link>
+            <span className="text-muted-foreground">/</span>
+            <Link
+              to={`/virevo/brainstorm/projects/${sessionData.projectId}`}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              {projectName}
+            </Link>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{sessionTitle}</span>
+            {statusInfo && (
+              <Badge variant={statusInfo.variant} className="ml-2">
+                {sessionData.status === 'completing' && (
+                  <SpinnerGap className="mr-1 size-3 animate-spin" />
+                )}
+                {statusInfo.label}
+              </Badge>
+            )}
+          </div>
         </div>
 
         {/* Messages */}
-        <ScrollArea className="flex-1 p-4">
-          <div className="mx-auto max-w-2xl flex flex-col gap-4">
+        <ScrollArea ref={scrollRef} className="flex-1">
+          <div className="mx-auto max-w-2xl flex flex-col gap-1 p-4">
             {messages.length === 0 && !streamingText ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <p className="text-lg">开始讨论吧</p>
@@ -273,32 +342,22 @@ export function SessionPage() {
               </div>
             ) : (
               messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg px-4 py-2 text-sm ${
-                      msg.type === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted'
-                    }`}
-                  >
-                    {msg.content}
-                  </div>
-                </div>
+                <ChatBubble key={msg.id} message={msg} />
               ))
             )}
-            {/* Streaming indicator */}
+
+            {/* Streaming AI response */}
             {streamingText && (
-              <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-lg bg-muted px-4 py-2 text-sm">
-                  {streamingText}
-                  <span className="animate-pulse text-muted-foreground">
-                    ▊
-                  </span>
-                </div>
-              </div>
+              <ChatBubble
+                message={{
+                  id: 'streaming',
+                  content: streamingText,
+                  type: 'ai',
+                  timestamp: new Date().toISOString(),
+                  participantId: 'ai',
+                }}
+                isStreaming
+              />
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -311,7 +370,7 @@ export function SessionPage() {
           <Button
             variant="outline"
             onClick={handleExtract}
-            disabled={messages.length === 0 || sending || extracting}
+            disabled={messages.length === 0 || sending || extracting || isReadOnly}
           >
             {extracting ? (
               <SpinnerGap className="size-4 animate-spin" />
@@ -322,26 +381,28 @@ export function SessionPage() {
           </Button>
           <Input
             ref={inputRef}
-            placeholder="输入你的想法..."
+            placeholder={
+              isReadOnly ? '讨论会已结束' : '输入你的想法...'
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) =>
               e.key === 'Enter' && !e.shiftKey && handleSend()
             }
-            disabled={sending}
+            disabled={sending || isReadOnly}
             className="flex-1"
           />
           <Button
             onClick={handleSend}
-            disabled={!input.trim() || sending}
+            disabled={!input.trim() || sending || isReadOnly}
             size="icon"
           >
             <PaperPlaneRight className="size-4" />
           </Button>
           <Button
             variant="destructive"
-            onClick={handleEnd}
-            disabled={sending}
+            onClick={() => setShowEndDialog(true)}
+            disabled={sending || ending || isReadOnly}
           >
             <StopCircle className="size-4" />
             结束
@@ -349,7 +410,7 @@ export function SessionPage() {
         </div>
       </div>
 
-      {/* Requirements Sheet (floating panel via Portal) */}
+      {/* Requirements Sheet */}
       <Sheet open={showPanel} onOpenChange={setShowPanel}>
         <SheetContent side="right" className="w-96">
           <SheetHeader>
@@ -436,6 +497,92 @@ export function SessionPage() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
+
+      {/* End Session Confirmation Dialog */}
+      <AlertDialog open={showEndDialog} onOpenChange={setShowEndDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <WarningCircleIcon className="size-5 text-destructive" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>结束本次讨论会？</AlertDialogTitle>
+            <AlertDialogDescription>
+              结束后，AI 将在后台自动生成会议纪要。你可以在项目详情的「会议记录」中查看。
+              结束后无法继续发送消息。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={ending}>
+              继续讨论
+            </AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleEnd} disabled={ending}>
+              {ending ? (
+                <>
+                  <SpinnerGap className="size-4 animate-spin" />
+                  结束中...
+                </>
+              ) : (
+                '确认结束'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// ── Chat Bubble Component ──────────────────────────────────────────
+
+function ChatBubble({
+  message,
+  isStreaming = false,
+}: {
+  message: Message
+  isStreaming?: boolean
+}) {
+  const isUser = message.type === 'user'
+  const time = new Date(message.timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  return (
+    <div className={`flex gap-3 py-2 ${isUser ? '' : ''}`}>
+      {/* Avatar */}
+      <div className="flex-shrink-0">
+        {isUser ? (
+          <div className="flex size-8 items-center justify-center rounded-full bg-primary/10">
+            <UserCircleIcon className="size-5 text-primary" weight="fill" />
+          </div>
+        ) : (
+          <div className="flex size-8 items-center justify-center rounded-full bg-muted">
+            <RobotIcon className="size-5 text-muted-foreground" weight="fill" />
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium">
+            {isUser ? '你' : 'AI 助手'}
+          </span>
+          <span className="text-muted-foreground text-xs">{time}</span>
+        </div>
+        <div className="min-w-0 rounded-lg px-3 py-2 text-sm">
+          {isUser ? (
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          ) : (
+            <MarkdownContent content={message.content} />
+          )}
+          {isStreaming && (
+            <span className="ml-0.5 inline-block animate-pulse text-muted-foreground">
+              ▊
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

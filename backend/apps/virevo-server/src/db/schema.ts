@@ -18,10 +18,17 @@ export const projectStatusEnum = pgEnum('project_status', [
 
 export const sessionStatusEnum = pgEnum('session_status', [
   'active',
+  'completing',
   'completed',
 ])
 
-export const messageTypeEnum = pgEnum('message_type', ['user', 'ai'])
+export const messageTypeEnum = pgEnum('message_type', ['user', 'ai', 'system'])
+
+export const chatMessageStatusEnum = pgEnum('chat_message_status', [
+  'sending',
+  'sent',
+  'failed',
+])
 
 export const participantTypeEnum = pgEnum('participant_type', [
   'user',
@@ -54,6 +61,17 @@ export const actionItemStatusEnum = pgEnum('action_item_status', [
 
 export const memberRoleEnum = pgEnum('member_role', ['owner', 'member'])
 
+export const sessionParticipantRoleEnum = pgEnum('session_participant_role', [
+  'host',
+  'member',
+])
+
+export const handRaiseStatusEnum = pgEnum('hand_raise_status', [
+  'pending',
+  'allowed',
+  'dismissed',
+])
+
 // Projects
 export const projects = pgTable('projects', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -74,12 +92,13 @@ export const projectMembers = pgTable('project_members', {
     .notNull()
     .references(() => projects.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  email: text('email').notNull(),
+  email: text('email'),
   role: memberRoleEnum('role').notNull().default('member'),
+  inviteToken: text('invite_token').unique(),
   joinedAt: timestamp('joined_at').notNull().defaultNow(),
 })
 
-// Sessions
+// Sessions (chat groups)
 export const sessions = pgTable('sessions', {
   id: uuid('id').defaultRandom().primaryKey(),
   projectId: uuid('project_id')
@@ -87,20 +106,29 @@ export const sessions = pgTable('sessions', {
     .references(() => projects.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   status: sessionStatusEnum('status').notNull().default('active'),
-  mastraRunId: text('mastra_run_id'),
+  roundNumber: integer('round_number').notNull().default(0),
+  creatorId: uuid('creator_id').references(() => projectMembers.id, {
+    onDelete: 'set null',
+  }),
+  lastMessageAt: timestamp('last_message_at').defaultNow(),
+  lastMessagePreview: text('last_message_preview').notNull().default(''),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   endedAt: timestamp('ended_at'),
 })
 
-// Messages
+// Messages (chat messages)
 export const messages = pgTable('messages', {
   id: uuid('id').defaultRandom().primaryKey(),
   sessionId: uuid('session_id')
     .notNull()
     .references(() => sessions.id, { onDelete: 'cascade' }),
   participantId: text('participant_id').notNull(),
+  nickname: text('nickname').notNull().default(''),
   content: text('content').notNull(),
   type: messageTypeEnum('type').notNull(),
+  messageType: text('message_type').notNull().default('text'), // text, system, ai
+  status: chatMessageStatusEnum('status').notNull().default('sent'),
+  replyTo: uuid('reply_to'),
   timestamp: timestamp('timestamp').notNull().defaultNow(),
 })
 
@@ -140,6 +168,51 @@ export const userStories = pgTable('user_stories', {
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
   acceptanceCriteria: jsonb('acceptance_criteria').notNull().default([]),
+})
+
+// Session Participants (chat group members)
+export const sessionParticipants = pgTable('session_participants', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sessionId: uuid('session_id')
+    .notNull()
+    .references(() => sessions.id, { onDelete: 'cascade' }),
+  projectMemberId: uuid('project_member_id').references(
+    () => projectMembers.id,
+    { onDelete: 'set null' },
+  ),
+  nickname: text('nickname').notNull(),
+  role: sessionParticipantRoleEnum('role').notNull().default('member'),
+  status: text('status').notNull().default('active'), // 'active' | 'left'
+  color: text('color').notNull().default('#4F46E5'),
+  lastReadAt: timestamp('last_read_at').defaultNow(),
+  joinedAt: timestamp('joined_at').notNull().defaultNow(),
+})
+
+// Hand Raises
+export const handRaises = pgTable('hand_raises', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sessionId: uuid('session_id')
+    .notNull()
+    .references(() => sessions.id, { onDelete: 'cascade' }),
+  participantId: uuid('participant_id')
+    .notNull()
+    .references(() => sessionParticipants.id, { onDelete: 'cascade' }),
+  status: handRaiseStatusEnum('status').notNull().default('pending'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Reviews (member scores for epics)
+export const reviews = pgTable('reviews', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  epicId: uuid('epic_id')
+    .notNull()
+    .references(() => epics.id, { onDelete: 'cascade' }),
+  projectMemberId: uuid('project_member_id')
+    .notNull()
+    .references(() => projectMembers.id, { onDelete: 'cascade' }),
+  score: integer('score').notNull(),
+  comment: text('comment').notNull().default(''),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
 // Meeting Minutes
