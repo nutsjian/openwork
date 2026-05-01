@@ -1,12 +1,6 @@
-// @ts-nocheck
-// Mastra v1.28 runtime types have gaps:
-// - WorkflowRunOutput.fullStream property not in public types (but exists at runtime)
-// - resumeStream options (closeOnSuspend) not fully typed
-// All patterns validated at runtime.
-
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { eq, desc, and, sql } from 'drizzle-orm'
+import { eq, desc } from 'drizzle-orm'
 import { z } from 'zod'
 import { db } from '@/db'
 import {
@@ -18,8 +12,6 @@ import {
   userStories,
   projects,
 } from '@/db/schema'
-import { getMastra } from '@/workflows/brainstorm'
-import { facilitatorAgent } from '@/agents/facilitator'
 import { facilitatorAgent } from '@/agents/facilitator'
 
 const app = new Hono()
@@ -29,8 +21,6 @@ app.onError((err, c) => {
   return c.json({ error: err.message || 'Internal Server Error' }, 500)
 })
 
-// ── Validators ────────────────────────────────────────────────────
-
 const createSessionSchema = z.object({
   projectId: z.string().uuid(),
   title: z.string().default('需求讨论会'),
@@ -39,8 +29,6 @@ const createSessionSchema = z.object({
 const messageSchema = z.object({
   content: z.string().min(1),
 })
-
-// ── POST /sessions (create + start workflow) ─────────────────────
 
 app.post('/', async (c) => {
   const body = await c.req.json()
@@ -58,28 +46,8 @@ app.post('/', async (c) => {
     })
     .returning()
 
-  const m = getMastra()
-  const workflow = m.getWorkflow('brainstorm-session')
-  const run = await workflow.createRun()
-  const result = await run.start({
-    inputData: {
-      projectId: parsed.data.projectId,
-      sessionTitle: parsed.data.title,
-    },
-  })
-
-  await db
-    .update(sessions)
-    .set({ mastraRunId: run.runId })
-    .where(eq(sessions.id, session.id))
-
-  return c.json(
-    { ...session, mastraRunId: run.runId, status: result.status },
-    201,
-  )
+  return c.json(session, 201)
 })
-
-// ── GET /sessions (list, optionally filtered by projectId) ──────
 
 app.get('/', async (c) => {
   const projectId = c.req.query('projectId')
@@ -112,8 +80,6 @@ app.get('/', async (c) => {
   return c.json(result)
 })
 
-// ── GET /sessions/:id ────────────────────────────────────────────
-
 app.get('/:id', async (c) => {
   const id = c.req.param('id')
   const [session] = await db
@@ -125,7 +91,6 @@ app.get('/:id', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  // Fetch associated project info for breadcrumb navigation
   const [project] = await db
     .select({ id: projects.id, name: projects.name })
     .from(projects)
@@ -139,76 +104,6 @@ app.get('/:id', async (c) => {
 
   return c.json({ ...session, project: project ?? null, messages: msgs })
 })
-
-// ── GET /sessions/:id/stream (SSE streaming) ────────────────────
-
-app.get('/:id/stream', async (c) => {
-  const id = c.req.param('id')
-
-  const [session] = await db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.id, id))
-
-  if (!session) {
-    return c.json({ error: 'Session not found' }, 404)
-  }
-
-  const m = getMastra()
-  const workflow = m.getWorkflow('brainstorm-session')
-  const run = await workflow.createRun({ runId: session.mastraRunId! })
-
-  return streamSSE(c, async (stream) => {
-    try {
-      const output = run.resumeStream({
-        step: 'user-turn',
-        resumeData: { message: '' },
-        closeOnSuspend: true,
-      })
-
-      // WorkflowRunOutput exposes a ReadableStream at .fullStream
-      const reader = (output as any).fullStream.getReader()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunkType = value?.type
-        const payload = value?.payload
-
-        if (
-          chunkType === 'workflow-step-result' &&
-          payload?.id === 'ai-turn'
-        ) {
-          const aiMessage = payload?.output?.aiMessage
-          if (aiMessage) {
-            await db.insert(messages).values({
-              sessionId: id,
-              participantId: 'ai',
-              content: aiMessage,
-              type: 'ai',
-            })
-            await stream.writeSSE({
-              data: JSON.stringify({ aiMessage }),
-            })
-          }
-        } else if (chunkType === 'workflow-step-suspended') {
-          await stream.writeSSE({
-            event: 'suspended',
-            data: JSON.stringify({ step: payload?.id }),
-          })
-        }
-      }
-    } catch (err: any) {
-      console.error('[sessions] Stream error:', err.message)
-      await stream.writeSSE({
-        event: 'error',
-        data: JSON.stringify({ error: err.message }),
-      })
-    }
-  })
-})
-
-// ── POST /sessions/:id/messages (send message + stream AI response) ──
 
 app.post('/:id/messages', async (c) => {
   const id = c.req.param('id')
@@ -228,7 +123,6 @@ app.post('/:id/messages', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  // Save user message to DB
   const [savedMessage] = await db
     .insert(messages)
     .values({
@@ -239,141 +133,63 @@ app.post('/:id/messages', async (c) => {
     })
     .returning()
 
-  const m = getMastra()
-  const workflow = m.getWorkflow('brainstorm-session')
-  const run = await workflow.createRun({ runId: session.mastraRunId! })
+  const existingMessages = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.sessionId, id))
+    .orderBy(messages.timestamp)
+
+  const chatMessages = existingMessages.map((m) => ({
+    role: m.type === 'user' ? ('user' as const) : ('assistant' as const),
+    content: m.content,
+  }))
 
   try {
-    const output = run.resumeStream({
-      step: 'user-turn',
-      resumeData: { message: parsed.data.content },
-    })
+    const stream = await facilitatorAgent.stream(chatMessages)
 
-    // resumeStream() returns WorkflowRunOutput with .fullStream (ReadableStream)
-    // Chunk types: workflow-start, workflow-step-result, workflow-step-suspended, workflow-finish, etc.
-    return streamSSE(c, async (stream) => {
-      // Send user message confirmation immediately
-      await stream.writeSSE({
+    return streamSSE(c, async (sseStream) => {
+      await sseStream.writeSSE({
         event: 'user-message',
         data: JSON.stringify(savedMessage),
       })
 
+      let fullAiMessage = ''
+
       try {
-        const ws = (output as any).fullStream as ReadableStream
-        const reader = ws.getReader()
-        let fullAiMessage = ''
-        let stepResultSaved = false
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          const chunkType = value?.type
-          const payload = value?.payload
-
-          // Debug log (remove in production)
-          if (chunkType === 'workflow-step-result') {
-            console.log(
-              '[sessions] step-result:',
-              payload?.id,
-              payload?.status,
-              JSON.stringify(payload?.output ?? {}).substring(0, 200),
-            )
-          }
-
-          // Forward workflow-step-result events to client
-          if (chunkType === 'workflow-step-result' && payload?.id) {
-            await stream.writeSSE({
-              event: 'step-result',
-              data: JSON.stringify({
-                type: 'step-result',
-                id: payload.id,
-                status: payload.status,
-                output: payload.output,
-              }),
-            })
-
-            // Extract AI message from ai-turn step result
-            if (
-              payload.id === 'ai-turn' &&
-              payload.output?.aiMessage
-            ) {
-              fullAiMessage = payload.output.aiMessage
-            }
-          } else if (chunkType === 'workflow-step-suspended') {
-            await stream.writeSSE({
-              event: 'suspended',
-              data: JSON.stringify({
-                type: 'suspended',
-                step: payload?.id,
-              }),
-            })
-          } else if (chunkType === 'workflow-finish') {
-            await stream.writeSSE({
-              event: 'finish',
-              data: JSON.stringify(payload),
-            })
-          }
+        for await (const chunk of stream.textStream) {
+          fullAiMessage += chunk
+          await sseStream.writeSSE({
+            event: 'chunk',
+            data: JSON.stringify({ text: chunk }),
+          })
         }
 
-        // Persist the complete AI message to DB
-        if (fullAiMessage && !stepResultSaved) {
+        if (fullAiMessage) {
           await db.insert(messages).values({
             sessionId: id,
             participantId: 'ai',
             content: fullAiMessage,
             type: 'ai',
           })
-          stepResultSaved = true
-          await stream.writeSSE({
-            event: 'done',
-            data: JSON.stringify({ saved: true }),
-          })
         }
+
+        await sseStream.writeSSE({
+          event: 'done',
+          data: JSON.stringify({ saved: true }),
+        })
       } catch (err: any) {
         console.error('[sessions] Stream error:', err.message)
-        await stream.writeSSE({
+        await sseStream.writeSSE({
           event: 'error',
           data: JSON.stringify({ error: err.message }),
         })
       }
     })
   } catch (err: any) {
-    console.error('[sessions] Workflow resume error:', err.message)
-    console.error(err.stack?.substring(0, 500))
-    return c.json(
-      { error: `Workflow error: ${err.message}`, runId: session.mastraRunId },
-      500,
-    )
+    console.error('[sessions] Agent error:', err.message)
+    return c.json({ error: `Agent error: ${err.message}` }, 500)
   }
 })
-
-// ── POST /sessions/:id/skip ─────────────────────────────────────
-
-app.post('/:id/skip', async (c) => {
-  const id = c.req.param('id')
-
-  const [session] = await db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.id, id))
-
-  if (!session) {
-    return c.json({ error: 'Session not found' }, 404)
-  }
-
-  const m = getMastra()
-  const workflow = m.getWorkflow('brainstorm-session')
-  const run = await workflow.createRun({ runId: session.mastraRunId! })
-  const result = await run.resume({
-    step: 'user-turn',
-    resumeData: { message: '' },
-  })
-
-  return c.json({ workflowStatus: result.status })
-})
-
-// ── POST /sessions/:id/end ──────────────────────────────────────
 
 app.post('/:id/end', async (c) => {
   const id = c.req.param('id')
@@ -387,21 +203,17 @@ app.post('/:id/end', async (c) => {
     return c.json({ error: 'Session not found' }, 404)
   }
 
-  // Fetch all messages for this session
   const msgs = await db
     .select()
     .from(messages)
     .where(eq(messages.sessionId, id))
     .orderBy(messages.timestamp)
 
-  // Generate meeting minutes directly via the agent
   const historyText = msgs
-    .map((m) =>
-      `[${m.type === 'user' ? '用户' : 'AI'}]: ${m.content}`,
-    )
+    .map((m) => `[${m.type === 'user' ? '用户' : 'AI'}]: ${m.content}`)
     .join('\n')
 
-  const response = await facilitatorAgent.generate(
+  const minutesText = await facilitatorAgent.generate(
     `请根据以下对话记录生成一份会议纪要（Markdown 格式）。要求包含：
 - 会议日期
 - 参与者
@@ -414,12 +226,6 @@ app.post('/:id/end', async (c) => {
 ${historyText}`,
   )
 
-  const minutesText =
-    typeof response === 'string'
-      ? response
-      : response.text ?? '（生成失败）'
-
-  // Persist meeting minutes to DB
   const [minutes] = await db
     .insert(meetingMinutes)
     .values({
@@ -430,7 +236,6 @@ ${historyText}`,
     })
     .returning()
 
-  // Mark session as completed
   await db
     .update(sessions)
     .set({ status: 'completed', endedAt: new Date() })
@@ -438,8 +243,6 @@ ${historyText}`,
 
   return c.json({ minutes })
 })
-
-// ── POST /sessions/:id/extract ─────────────────────────────────
 
 app.post('/:id/extract', async (c) => {
   const id = c.req.param('id')
@@ -454,18 +257,16 @@ app.post('/:id/extract', async (c) => {
     return c.json({ epics: [] })
   }
 
-  // Get session for projectId
   const [session] = await db
     .select()
     .from(sessions)
     .where(eq(sessions.id, id))
 
-  // Build conversation text for the AI
   const conversationText = msgs
     .map((m) => `[${m.type === 'user' ? 'user' : 'assistant'}]: ${m.content}`)
     .join('\n')
 
-  const response = await facilitatorAgent.generate(
+  const text = await facilitatorAgent.generate(
     `请分析以下对话记录，提取其中涉及的所有需求，并按照 Epic → Feature → User Story 的层级结构进行整理。
 
 要求：
@@ -501,12 +302,6 @@ app.post('/:id/extract', async (c) => {
 ${conversationText}`,
   )
 
-  const text =
-    typeof response === 'string'
-      ? response
-      : (response.text ?? '{"epics": []}')
-
-  // Extract JSON from response (may be wrapped in markdown code block)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   let extractedEpics: any[] = []
   if (jsonMatch) {
@@ -518,12 +313,8 @@ ${conversationText}`,
     }
   }
 
-  // Overwrite mode: delete existing epics for this session (cascades to features + user_stories)
-  await db
-    .delete(epics)
-    .where(eq(epics.sessionId, id))
+  await db.delete(epics).where(eq(epics.sessionId, id))
 
-  // Persist extracted requirements
   for (const epic of extractedEpics) {
     const [insertedEpic] = await db
       .insert(epics)
@@ -556,7 +347,6 @@ ${conversationText}`,
     }
   }
 
-  // Return persisted structure with nested features + userStories
   const persistedEpics = await db
     .select()
     .from(epics)
